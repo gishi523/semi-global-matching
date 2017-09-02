@@ -1,4 +1,7 @@
+#include <iostream>
+#include <chrono>
 #include <opencv2/opencv.hpp>
+
 #include "semi_global_matching.h"
 
 int main(int argc, char* argv[])
@@ -29,13 +32,13 @@ int main(int argc, char* argv[])
 			break;
 		}
 
-		cv::TickMeter t;
-		t.start();
+		const auto t1 = std::chrono::system_clock::now();
 
 		cv::Mat disparity = sgm.compute(I1, I2);
 
-		t.stop();
-		std::cout << "disparity computation time: " << t.getTimeMilli() << "[msec]" << std::endl;
+		const auto t2 = std::chrono::system_clock::now();
+		const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+		std::cout << "disparity computation time: " << duration << "[msec]" << std::endl;
 		
 		disparity.convertTo(disparity, CV_32F, 1. / SemiGlobalMatching::DISP_SCALE);
 
