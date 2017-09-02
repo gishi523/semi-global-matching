@@ -41,9 +41,10 @@ int main(int argc, char* argv[])
 		std::cout << "disparity computation time: " << duration << "[msec]" << std::endl;
 		
 		disparity.convertTo(disparity, CV_32F, 1. / SemiGlobalMatching::DISP_SCALE);
+		if (I1.type() == CV_16U) cv::normalize(I1, I1, 0, 255, cv::NORM_MINMAX, CV_8U);
 
-		cv::imshow("image", 16 * I1);
-		cv::imshow("disparity", disparity / 64);
+		cv::imshow("image", I1);
+		cv::imshow("disparity", disparity / param.numDisparities);
 		const char c = cv::waitKey(1);
 		if (c == 27)
 			break;
