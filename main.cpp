@@ -4,9 +4,9 @@
 
 int main(int argc, char* argv[])
 {
-	if (argc < 4)
+	if (argc < 3)
 	{
-		std::cout << "usage: " << argv[0] << " left-image-format right-image-format camera.xml" << std::endl;
+		std::cout << "usage: " << argv[0] << " left-image-format right-image-format" << std::endl;
 		return -1;
 	}
 
@@ -32,8 +32,10 @@ int main(int argc, char* argv[])
 		CV_Assert(I1.size() == I2.size() && I1.type() == I2.type());
 		if (I1.type() == CV_16U)
 		{
-			cv::normalize(I1, I1, 0, 255, cv::NORM_MINMAX, CV_8U);
-			cv::normalize(I2, I2, 0, 255, cv::NORM_MINMAX, CV_8U);
+			cv::normalize(I1, I1, 0, 255, cv::NORM_MINMAX);
+			cv::normalize(I2, I2, 0, 255, cv::NORM_MINMAX);
+			I1.convertTo(I1, CV_8U);
+			I2.convertTo(I2, CV_8U);
 		}
 
 		const auto t1 = std::chrono::system_clock::now();
