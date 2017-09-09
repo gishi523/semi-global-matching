@@ -20,6 +20,11 @@ static inline int _mm_hmin_epu16(__m128i v)
 }
 #endif
 
+static inline int min4(int x, int y, int z, int w)
+{
+	return std::min(std::min(x, y), std::min(z, w));
+};
+
 static void census9x7(const uchar* src, uint64_t* dst, int h, int w)
 {
 	const int RADIUS_U = 9 / 2;
