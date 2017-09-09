@@ -1,7 +1,5 @@
-#include <iostream>
-#include <chrono>
 #include <opencv2/opencv.hpp>
-
+#include <chrono>
 #include "semi_global_matching.h"
 
 int main(int argc, char* argv[])
@@ -13,9 +11,8 @@ int main(int argc, char* argv[])
 	}
 
 	SemiGlobalMatching::Parameters param;
-	// param.numPaths = 8;
 	SemiGlobalMatching sgm(param);
-	
+
 	for (int frameno = 1;; frameno++)
 	{
 		char buf1[256];
@@ -32,6 +29,13 @@ int main(int argc, char* argv[])
 			break;
 		}
 
+		CV_Assert(I1.size() == I2.size() && I1.type() == I2.type());
+		if (I1.type() == CV_16U)
+		{
+			cv::normalize(I1, I1, 0, 255, cv::NORM_MINMAX, CV_8U);
+			cv::normalize(I2, I2, 0, 255, cv::NORM_MINMAX, CV_8U);
+		}
+
 		const auto t1 = std::chrono::system_clock::now();
 
 		cv::Mat disparity = sgm.compute(I1, I2);
@@ -39,9 +43,9 @@ int main(int argc, char* argv[])
 		const auto t2 = std::chrono::system_clock::now();
 		const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
 		std::cout << "disparity computation time: " << duration << "[msec]" << std::endl;
-		
+
+		disparity.setTo(0, disparity == SemiGlobalMatching::DISP_INV);
 		disparity.convertTo(disparity, CV_32F, 1. / SemiGlobalMatching::DISP_SCALE);
-		if (I1.type() == CV_16U) cv::normalize(I1, I1, 0, 255, cv::NORM_MINMAX, CV_8U);
 
 		cv::imshow("image", I1);
 		cv::imshow("disparity", disparity / param.numDisparities);
