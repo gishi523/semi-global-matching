@@ -221,7 +221,9 @@ cv::Mat SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2)
 #else
 					for (int d = 0; d < n; d++)
 					{
-						const int _Lc = C[d] + min4(Lp[d], Lp[d - 1] + P1, Lp[d + 1] + P1, minLp + P2) - minLp;
+						const int Lp_m_P1 = d > 0 ? Lp[d - 1] + P1 : 0xffff;
+						const int Lp_p_P1 = d < n - 1 ? Lp[d + 1] + P1 : 0xffff;
+						const int _Lc = C[d] + min4(Lp[d], Lp_m_P1, Lp_p_P1, minLp + P2) - minLp;
 						Lc[d] = static_cast<ushort>(_Lc);
 						minLc = std::min(minLc, _Lc);
 					}
