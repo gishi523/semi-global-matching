@@ -39,9 +39,12 @@ public:
 	};
 
 	SemiGlobalMatching(const Parameters& param = Parameters());
-	cv::Mat compute(const cv::Mat& I1, const cv::Mat& I2);
+	void compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& D1);
 
 private:
+
+	cv::Mat_<uint32_t> census32[2];
+	cv::Mat1w MC;
 
 	Parameters param_;
 };
