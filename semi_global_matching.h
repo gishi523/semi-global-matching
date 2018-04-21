@@ -10,7 +10,7 @@ public:
 	static const int DISP_SHIFT = 4;
 	static const int DISP_SCALE = (1 << DISP_SHIFT);
 	static const int DISP_INV = static_cast<ushort>(-1);
-
+	
 	enum CensusType
 	{
 		CENSUS_9x7,
@@ -39,12 +39,13 @@ public:
 	};
 
 	SemiGlobalMatching(const Parameters& param = Parameters());
-	void compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& D1);
+	void compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& D1, cv::Mat& D2);
 
 private:
 
 	cv::Mat_<uint32_t> census32[2];
-	cv::Mat1w MC;
+	cv::Mat1w MC, S;
+	std::vector<cv::Mat1w> L, minL;
 
 	Parameters param_;
 };

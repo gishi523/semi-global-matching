@@ -12,7 +12,7 @@ int main(int argc, char* argv[])
 
 	SemiGlobalMatching::Parameters param;
 	SemiGlobalMatching sgm(param);
-	cv::Mat D1;
+	cv::Mat D1, D2;
 	for (int frameno = 1;; frameno++)
 	{
 		char buf1[256];
@@ -40,7 +40,7 @@ int main(int argc, char* argv[])
 
 		const auto t1 = std::chrono::system_clock::now();
 
-		sgm.compute(I1, I2, D1);
+		sgm.compute(I1, I2, D1, D2);
 
 		const auto t2 = std::chrono::system_clock::now();
 		const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
@@ -55,4 +55,5 @@ int main(int argc, char* argv[])
 		if (c == 27)
 			break;
 	}
+	cv::StereoSGBM;
 }
