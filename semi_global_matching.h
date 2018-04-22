@@ -44,6 +44,7 @@ public:
 private:
 
 	cv::Mat_<uint32_t> census32[2];
+	cv::Mat_<uint64_t> census64[2];
 	cv::Mat1w MC, S;
 	std::vector<cv::Mat1w> L, minL;
 

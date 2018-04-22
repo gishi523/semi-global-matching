@@ -1,6 +1,13 @@
 #include "semi_global_matching.h"
 #include "timer.h"
 
+#define USE_OPENMP
+#if defined(_OPENMP) && defined(USE_OPENMP)
+#define OMP_PARALLEL_FOR omp parallel for
+#else
+#define OMP_PARALLEL_FOR
+#endif
+
 #ifdef _WIN32
 #define popcnt32 __popcnt
 #define popcnt64 __popcnt64
@@ -9,8 +16,8 @@
 #define popcnt64 __builtin_popcountll
 #endif
 
-//#define USE_SSE
-#ifdef USE_SSE
+#define WITH_SSE
+#ifdef WITH_SSE
 #include <smmintrin.h>
 static inline int _mm_hmin_epu16(__m128i v)
 {
@@ -22,22 +29,46 @@ static inline int _mm_hmin_epu16(__m128i v)
 namespace cv
 {
 	using Mat1u32 = Mat_<uint32_t>;
+	using Mat1u64 = Mat_<uint64_t>;
 }
 
-static inline int HammingDistance32(uint32_t c1, uint32_t c2)
-{
-	return static_cast<int>(popcnt32(c1 ^ c2));
-};
+template <typename T>
+static inline int HammingDistance(T c1, T c2) { return 0; }
 
-static inline int HammingDistance64(uint64_t c1, uint64_t c2)
-{
-	return static_cast<int>(popcnt64(c1 ^ c2));
-};
+template <>
+static inline int HammingDistance(uint64_t c1, uint64_t c2) { return static_cast<int>(popcnt64(c1 ^ c2)); }
+
+template <>
+static inline int HammingDistance(uint32_t c1, uint32_t c2) { return static_cast<int>(popcnt32(c1 ^ c2)); }
 
 static inline int min4(int x, int y, int z, int w)
 {
 	return std::min(std::min(x, y), std::min(z, w));
 };
+
+static void census9x7(const cv::Mat& src, cv::Mat1u64& dst)
+{
+	const int RADIUS_U = 9 / 2;
+	const int RADIUS_V = 7 / 2;
+	int v;
+#pragma OMP_PARALLEL_FOR
+	for (v = RADIUS_V; v < src.rows - RADIUS_V; v++)
+	{
+		for (int u = RADIUS_U; u < src.cols - RADIUS_U; u++)
+		{
+			uint64_t c = 0;
+			for (int dv = -RADIUS_V; dv <= RADIUS_V; dv++)
+			{
+				for (int du = -RADIUS_U; du <= RADIUS_U; du++)
+				{
+					c <<= 1;
+					c += src.ptr(v)[u] <= src.ptr(v + dv)[u + du] ? 0 : 1;
+				}
+			}
+			dst(v, u) = c;
+		}
+	}
+}
 
 static void symmetricCensus9x7(const cv::Mat& src, cv::Mat1u32& dst)
 {
@@ -45,6 +76,7 @@ static void symmetricCensus9x7(const cv::Mat& src, cv::Mat1u32& dst)
 	const int RADIUS_V = 7 / 2;
 
 	int v;
+#pragma OMP_PARALLEL_FOR
 	for (v = RADIUS_V; v < src.rows - RADIUS_V; v++)
 	{
 		for (int u = RADIUS_U; u < src.cols - RADIUS_U; u++)
@@ -74,30 +106,30 @@ static void symmetricCensus9x7(const cv::Mat& src, cv::Mat1u32& dst)
 					c += src.ptr(v1)[u1] <= src.ptr(v2)[u2] ? 0 : 1;
 				}
 			}
-
 			dst(v, u) = c;
 		}
 	}
 }
 
-static void calcMatchingCost(const cv::Mat1u32& census1, const cv::Mat1u32& census2, cv::Mat1w& MC, int n)
+template <typename T>
+static void calcMatchingCost(const cv::Mat_<T>& census1, const cv::Mat_<T>& census2, cv::Mat1w& MC, int n)
 {
 	const int h = census1.rows;
 	const int w = census1.cols;
 	int v;
-	//#pragma omp parallel for
+#pragma OMP_PARALLEL_FOR
 	for (v = 0; v < h; v++)
 	{
-		const uint32_t* _census1 = census1.ptr<uint32_t>(v);
-		const uint32_t* _census2 = census2.ptr<uint32_t>(v);
+		const T* _census1 = census1.ptr<T>(v);
+		const T* _census2 = census2.ptr<T>(v);
 		for (int u = 0; u < n; u++)
 		{
 			ushort* _MC = MC.ptr<ushort>(v, u);
 			for (int d = 0; d <= u; d++)
 			{
-				const uint32_t c1 = _census1[u];
-				const uint32_t c2 = _census2[u - d];
-				_MC[d] = static_cast<ushort>(HammingDistance32(c1, c2));
+				const T c1 = _census1[u];
+				const T c2 = _census2[u - d];
+				_MC[d] = static_cast<ushort>(HammingDistance(c1, c2));
 			}
 			for (int d = u + 1; d < n; d++)
 			{
@@ -109,9 +141,9 @@ static void calcMatchingCost(const cv::Mat1u32& census1, const cv::Mat1u32& cens
 			ushort* _MC = MC.ptr<ushort>(v, u);
 			for (int d = 0; d < n; d++)
 			{
-				const uint32_t c1 = _census1[u];
-				const uint32_t c2 = _census2[u - d];
-				_MC[d] = static_cast<ushort>(HammingDistance32(c1, c2));
+				const T c1 = _census1[u];
+				const T c2 = _census2[u - d];
+				_MC[d] = static_cast<ushort>(HammingDistance(c1, c2));
 			}
 		}
 	}
@@ -121,7 +153,7 @@ static inline ushort updateCost(const ushort* MC, const ushort* Lp, ushort* Lc, 
 {
 	ushort minLc = std::numeric_limits<ushort>::max();
 
-#ifdef USE_SSE
+#ifdef WITH_SSE
 
 	const __m128i _minLp = _mm_set1_epi16(minLp);
 	const __m128i _P1 = _mm_set1_epi16(P1);
@@ -166,7 +198,7 @@ static inline ushort updateCost(const ushort* MC, ushort* Lc, int n)
 {
 	ushort minLc = std::numeric_limits<ushort>::max();
 
-#ifdef USE_SSE
+#ifdef WITH_SSE
 
 	__m128i _minLc = _mm_set1_epi16(-1);
 	for (int d = 0; d < n; d += 8)
@@ -216,12 +248,67 @@ static void scanCost(const cv::Mat1w& MC, cv::Mat1w& L, cv::Mat1w& minL, int P1,
 			const ushort* _MC = MC.ptr<ushort>(vc, uc);
 			ushort* _Lc = L.ptr<ushort>(vc, uc);
 			ushort* _Lp = L.ptr<ushort>(vp, up);
-			
+
 			const bool inside = vp >= 0 && vp < h && up >= 0 && up < w;
-			const ushort minLc = inside ? updateCost(_MC, _Lc, _Lp, n, _minLp[up], P1, P2) : updateCost(_MC, _Lc, n);
+			const ushort minLc = inside ? updateCost(_MC, _Lp, _Lc, n, _minLp[up], P1, P2) : updateCost(_MC, _Lc, n);
 			_minLc[uc] = minLc;
 		}
 	}
+}
+
+static int winnerTakesAll(const ushort* L0, const ushort* L1, const ushort* L2, const ushort* L3,
+	const ushort* L4, const ushort* L5, const ushort* L6, const ushort* L7, ushort* S, int n)
+{
+	int minS = std::numeric_limits<int>::max();
+	int disp = 0;
+
+#ifdef WITH_SSE
+
+	for (int d = 0; d < n; d += 8)
+	{
+		__m128i _L0 = _mm_load_si128((__m128i*)&L0[d]);
+		__m128i _L1 = _mm_load_si128((__m128i*)&L1[d]);
+		__m128i _L2 = _mm_load_si128((__m128i*)&L2[d]);
+		__m128i _L3 = _mm_load_si128((__m128i*)&L3[d]);
+		__m128i _L4 = _mm_load_si128((__m128i*)&L4[d]);
+		__m128i _L5 = _mm_load_si128((__m128i*)&L5[d]);
+		__m128i _L6 = _mm_load_si128((__m128i*)&L6[d]);
+		__m128i _L7 = _mm_load_si128((__m128i*)&L7[d]);
+
+		_L0 = _mm_adds_epu16(_L0, _L1);
+		_L2 = _mm_adds_epu16(_L2, _L3);
+		_L4 = _mm_adds_epu16(_L4, _L5);
+		_L6 = _mm_adds_epu16(_L6, _L7);
+
+		_L0 = _mm_adds_epu16(_L0, _L2);
+		_L4 = _mm_adds_epu16(_L4, _L6);
+
+		const __m128i _S = _mm_adds_epu16(_L0, _L4);
+		const __m128i _minS = _mm_minpos_epu16(_S);
+		_mm_store_si128((__m128i*)&S[d], _S);
+		const int S = _mm_extract_epi16(_minS, 0);
+		if (S < minS)
+		{
+			minS = S;
+			disp = _mm_extract_epi16(_minS, 1) + d;
+		}
+	}
+
+#else
+
+	for (int d = 0; d < n; d++)
+	{
+		S[d] = L0[d] + L1[d] + L2[d] + L3[d] + L4[d] + L5[d] + L6[d] + L7[d];
+		if (S[d] < minS)
+		{
+			minS = S[d];
+			disp = d;
+		}
+	}
+
+#endif
+
+	return disp;
 }
 
 static void calcDisparity(const std::vector<cv::Mat1w>& L, cv::Mat& D1, cv::Mat& D2, cv::Mat1w& S, int DISP_SCALE)
@@ -232,7 +319,7 @@ static void calcDisparity(const std::vector<cv::Mat1w>& L, cv::Mat& D1, cv::Mat&
 	S = 0;
 
 	int v;
-//#pragma omp parallel for
+#pragma OMP_PARALLEL_FOR
 	for (v = 0; v < h; v++)
 	{
 		ushort* _D1 = D1.ptr<ushort>(v);
@@ -249,19 +336,7 @@ static void calcDisparity(const std::vector<cv::Mat1w>& L, cv::Mat& D1, cv::Mat&
 			const ushort* _L6 = L[6].ptr<ushort>(v, u);
 			const ushort* _L7 = L[7].ptr<ushort>(v, u);
 
-			// winner takes all
-			int minS = std::numeric_limits<int>::max();
-			int disp = 0;
-
-			for (int d = 0; d < n; d++)
-			{
-				_S[d] = _L0[d] + _L1[d] + _L2[d] + _L3[d] + _L4[d] + _L5[d] + _L6[d] + _L7[d];
-				if (_S[d] < minS)
-				{
-					minS = _S[d];
-					disp = d;
-				}
-			}
+			int disp = winnerTakesAll(_L0, _L1, _L2, _L3, _L4, _L5, _L6, _L7, _S, n);
 
 			// sub-pixel interpolation 
 			if (disp > 0 && disp < n - 1)
@@ -297,6 +372,25 @@ static void calcDisparity(const std::vector<cv::Mat1w>& L, cv::Mat& D1, cv::Mat&
 	}
 }
 
+static void LRConsistencyCheck(cv::Mat& D1, cv::Mat& D2, int max12Diff, int DISP_SHIFT, int DISP_INV)
+{
+	const int h = D1.rows;
+	const int w = D1.cols;
+	int v;
+#pragma OMP_PARALLEL_FOR
+	for (v = 0; v < h; v++)
+	{
+		ushort* _D1 = D1.ptr<ushort>(v);
+		ushort* _D2 = D2.ptr<ushort>(v);
+		for (int u = 0; u < w; u++)
+		{
+			const int d = _D1[u] >> DISP_SHIFT;
+			if (u - d >= 0 && std::abs(_D1[u] - _D2[u - d]) > max12Diff)
+				_D1[u] = DISP_INV;
+		}
+	}
+}
+
 SemiGlobalMatching::SemiGlobalMatching(const Parameters & param) : param_(param)
 {
 }
@@ -317,29 +411,50 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 
 	Timer t;
 
-	t.start("census");
-
-	// census transform
-	census32[0].create(h, w);
-	census32[1].create(h, w);
-	symmetricCensus9x7(I1, census32[0]);
-	symmetricCensus9x7(I2, census32[1]);
-
-	t.start("matching cost");
-
-	// calculate matching cost
 	MC.create(3, dims);
-	calcMatchingCost(census32[0], census32[1], MC, n);
+	if (param_.censusType == CENSUS_9x7)
+	{
+		t.start("census");
+
+		census64[0].create(h, w);
+		census64[1].create(h, w);
+		census9x7(I1, census64[0]);
+		census9x7(I2, census64[1]);
+
+		t.start("matching cost");
+
+		calcMatchingCost(census64[0], census64[1], MC, n);
+	}
+	else if (param_.censusType == SYMMETRIC_CENSUS_9x7)
+	{
+		t.start("census");
+
+		census32[0].create(h, w);
+		census32[1].create(h, w);
+		symmetricCensus9x7(I1, census32[0]);
+		symmetricCensus9x7(I2, census32[1]);
+
+		t.start("matching cost");
+
+		calcMatchingCost(census32[0], census32[1], MC, n);
+	}
+	else
+	{
+		CV_Error(cv::Error::StsInternal, "No such mode");
+	}
 
 	t.start("scan cost");
 
 	L.resize(NUM_DIRECTIONS);
 	minL.resize(NUM_DIRECTIONS);
-	for (int i = 0; i < NUM_DIRECTIONS; i++)
+
+	int dir;
+#pragma OMP_PARALLEL_FOR
+	for (dir = 0; dir < NUM_DIRECTIONS; dir++)
 	{
-		L[i].create(3, dims);
-		minL[i].create(3, dims);
-		scanCost(MC, L[i], minL[i], param_.P1, param_.P2, ru[i], rv[i]);
+		L[dir].create(3, dims);
+		minL[dir].create(3, dims);
+		scanCost(MC, L[dir], minL[dir], param_.P1, param_.P2, ru[dir], rv[dir]);
 	}
 
 	t.start("winner takes all");
@@ -348,6 +463,22 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 	D2.create(h, w, CV_16U);
 	S.create(3, dims);
 	calcDisparity(L, D1, D2, S, DISP_SCALE);
+
+	t.start("median");
+
+	if (param_.medianKernelSize > 0)
+	{
+		cv::medianBlur(D1, D1, param_.medianKernelSize);
+		cv::medianBlur(D2, D2, param_.medianKernelSize);
+	}
+
+	t.start("LR consistensy check");
+
+	const int max12Diff = param_.max12Diff << DISP_SHIFT;
+	if (max12Diff >= 0)
+	{
+		LRConsistencyCheck(D1, D2, max12Diff, DISP_SHIFT, DISP_INV);
+	}
 
 	t.plot();
 }
