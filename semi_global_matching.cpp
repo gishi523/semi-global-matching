@@ -1,5 +1,4 @@
 #include "semi_global_matching.h"
-#include "timer.h"
 #include <thread>
 
 #define USE_OPENMP
@@ -411,41 +410,27 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 	const int ru[NUM_DIRECTIONS] = { 1, 1, 0, -1, -1, -1, 0, 1 };
 	const int rv[NUM_DIRECTIONS] = { 0, 1, 1, 1, 0, -1, -1, -1 };
 
-	Timer t;
-
 	MC.create(3, dims);
 	if (param_.censusType == CENSUS_9x7)
 	{
-		t.start("census");
-
 		census64[0].create(h, w);
 		census64[1].create(h, w);
 		census9x7(I1, census64[0]);
 		census9x7(I2, census64[1]);
-
-		t.start("matching cost");
-
 		calcMatchingCost(census64[0], census64[1], MC, n);
 	}
 	else if (param_.censusType == SYMMETRIC_CENSUS_9x7)
 	{
-		t.start("census");
-
 		census32[0].create(h, w);
 		census32[1].create(h, w);
 		symmetricCensus9x7(I1, census32[0]);
 		symmetricCensus9x7(I2, census32[1]);
-
-		t.start("matching cost");
-
 		calcMatchingCost(census32[0], census32[1], MC, n);
 	}
 	else
 	{
 		CV_Error(cv::Error::StsInternal, "No such mode");
 	}
-
-	t.start("scan cost");
 
 	L.resize(NUM_DIRECTIONS);
 	minL.resize(NUM_DIRECTIONS);
@@ -461,14 +446,10 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 	for (int dir = 0; dir < NUM_DIRECTIONS; dir++)
 		threads[dir].join();
 
-	t.start("winner takes all");
-
 	D1.create(h, w, CV_16U);
 	D2.create(h, w, CV_16U);
 	S.create(3, dims);
 	calcDisparity(L, D1, D2, S, DISP_SCALE);
-
-	t.start("median");
 
 	if (param_.medianKernelSize > 0)
 	{
@@ -476,13 +457,9 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 		cv::medianBlur(D2, D2, param_.medianKernelSize);
 	}
 
-	t.start("LR consistensy check");
-
 	const int max12Diff = param_.max12Diff << DISP_SHIFT;
 	if (max12Diff >= 0)
 	{
 		LRConsistencyCheck(D1, D2, max12Diff, DISP_SHIFT, DISP_INV);
 	}
-
-	t.plot();
 }
