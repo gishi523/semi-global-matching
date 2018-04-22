@@ -9,7 +9,7 @@
 #define popcnt64 __builtin_popcountll
 #endif
 
-#define USE_SSE
+//#define USE_SSE
 #ifdef USE_SSE
 #include <smmintrin.h>
 static inline int _mm_hmin_epu16(__m128i v)
@@ -97,7 +97,7 @@ static void calcMatchingCost(const cv::Mat1u32& census1, const cv::Mat1u32& cens
 			{
 				const uint32_t c1 = _census1[u];
 				const uint32_t c2 = _census2[u - d];
-				_MC[d] = static_cast<uint16_t>(HammingDistance32(c1, c2));
+				_MC[d] = static_cast<ushort>(HammingDistance32(c1, c2));
 			}
 			for (int d = u + 1; d < n; d++)
 			{
@@ -111,7 +111,7 @@ static void calcMatchingCost(const cv::Mat1u32& census1, const cv::Mat1u32& cens
 			{
 				const uint32_t c1 = _census1[u];
 				const uint32_t c2 = _census2[u - d];
-				_MC[d] = static_cast<uint16_t>(HammingDistance32(c1, c2));
+				_MC[d] = static_cast<ushort>(HammingDistance32(c1, c2));
 			}
 		}
 	}
@@ -229,6 +229,7 @@ static void calcDisparity(const std::vector<cv::Mat1w>& L, cv::Mat& D1, cv::Mat&
 	const int h = S.size[0];
 	const int w = S.size[1];
 	const int n = S.size[2];
+	S = 0;
 
 	int v;
 //#pragma omp parallel for
