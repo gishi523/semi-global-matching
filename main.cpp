@@ -55,5 +55,4 @@ int main(int argc, char* argv[])
 		if (c == 27)
 			break;
 	}
-	cv::StereoSGBM;
 }

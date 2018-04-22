@@ -1,5 +1,6 @@
 #include "semi_global_matching.h"
 #include "timer.h"
+#include <thread>
 
 #define USE_OPENMP
 #if defined(_OPENMP) && defined(USE_OPENMP)
@@ -158,14 +159,14 @@ static inline ushort updateCost(const ushort* MC, const ushort* Lp, ushort* Lc, 
 	const __m128i _minLp = _mm_set1_epi16(minLp);
 	const __m128i _P1 = _mm_set1_epi16(P1);
 	const __m128i _P2 = _mm_set1_epi16(P2);
-	const __m128i _INV = _mm_set1_epi16(-1);
+	const __m128i _INF = _mm_set1_epi16(-1);
 	__m128i _minLc = _mm_set1_epi16(-1);
 	for (int d = 0; d < n; d += 8)
 	{
 		const __m128i _MC = _mm_load_si128((__m128i*)&MC[d]);
 		__m128i _Lp0 = _mm_load_si128((__m128i*)&Lp[d]);
-		__m128i _Lp1 = d > 0 ? _mm_loadu_si128((__m128i*)&Lp[d - 1]) : _mm_alignr_epi8(_Lp0, _INV, 14);
-		__m128i _Lp2 = d < n - 8 ? _mm_loadu_si128((__m128i*)&Lp[d + 1]) : _mm_alignr_epi8(_INV, _Lp0, 2);
+		__m128i _Lp1 = d > 0 ? _mm_loadu_si128((__m128i*)&Lp[d - 1]) : _mm_alignr_epi8(_Lp0, _INF, 14);
+		__m128i _Lp2 = d < n - 8 ? _mm_loadu_si128((__m128i*)&Lp[d + 1]) : _mm_alignr_epi8(_INF, _Lp0, 2);
 		__m128i _Lp3 = _mm_adds_epu16(_minLp, _P2);
 		_Lp0 = _mm_min_epu16(_Lp0, _mm_adds_epu16(_Lp1, _P1));
 		_Lp1 = _mm_min_epu16(_Lp3, _mm_adds_epu16(_Lp2, _P1));
@@ -241,13 +242,13 @@ static void scanCost(const cv::Mat1w& MC, cv::Mat1w& L, cv::Mat1w& minL, int P1,
 	{
 		const int vp = vc - rv;
 		ushort* _minLc = minL.ptr<ushort>(vc);
-		ushort* _minLp = minL.ptr<ushort>(vp);
+		ushort* _minLp = (ushort*)(minL.data + minL.step.p[0] * vp); // for CV_DbgAssert avoidance
 		for (int uc = u0; uc != u1; uc += du)
 		{
 			const int up = uc - ru;
 			const ushort* _MC = MC.ptr<ushort>(vc, uc);
 			ushort* _Lc = L.ptr<ushort>(vc, uc);
-			ushort* _Lp = L.ptr<ushort>(vp, up);
+			ushort* _Lp = (ushort*)(L.data + vp * L.step.p[0] + up * L.step.p[1]); // for CV_DbgAssert avoidance
 
 			const bool inside = vp >= 0 && vp < h && up >= 0 && up < w;
 			const ushort minLc = inside ? updateCost(_MC, _Lp, _Lc, n, _minLp[up], P1, P2) : updateCost(_MC, _Lc, n);
@@ -360,7 +361,7 @@ static void calcDisparity(const std::vector<cv::Mat1w>& L, cv::Mat& D1, cv::Mat&
 			int disp = 0;
 			for (int d = 0; d < n && u + d < w; d++)
 			{
-				ushort _S = S(v, u + d, d);
+				const ushort _S = S(v, u + d, d);
 				if (_S < minS)
 				{
 					minS = _S;
@@ -399,6 +400,7 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 {
 	CV_Assert(I1.type() == CV_8U && I2.type() == CV_8U);
 	CV_Assert(I1.size() == I2.size());
+	CV_Assert(param_.numDisparities % 16 == 0);
 
 	const int h = I1.rows;
 	const int w = I1.cols;
@@ -448,14 +450,16 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 	L.resize(NUM_DIRECTIONS);
 	minL.resize(NUM_DIRECTIONS);
 
-	int dir;
-#pragma OMP_PARALLEL_FOR
-	for (dir = 0; dir < NUM_DIRECTIONS; dir++)
+	std::vector<std::thread> threads(NUM_DIRECTIONS);
+	for (int dir = 0; dir < NUM_DIRECTIONS; dir++)
 	{
 		L[dir].create(3, dims);
 		minL[dir].create(3, dims);
-		scanCost(MC, L[dir], minL[dir], param_.P1, param_.P2, ru[dir], rv[dir]);
+		threads[dir] = std::thread(scanCost, std::cref(MC), std::ref(L[dir]), std::ref(minL[dir]),
+			param_.P1, param_.P2, ru[dir], rv[dir]);
 	}
+	for (int dir = 0; dir < NUM_DIRECTIONS; dir++)
+		threads[dir].join();
 
 	t.start("winner takes all");
 
