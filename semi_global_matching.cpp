@@ -439,7 +439,7 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 	for (int dir = 0; dir < NUM_DIRECTIONS; dir++)
 	{
 		L[dir].create(3, dims);
-		minL[dir].create(3, dims);
+		minL[dir].create(h, w);
 		threads[dir] = std::thread(scanCost, std::cref(MC), std::ref(L[dir]), std::ref(minL[dir]),
 			param_.P1, param_.P2, ru[dir], rv[dir]);
 	}
