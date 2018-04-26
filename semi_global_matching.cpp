@@ -1,5 +1,4 @@
 #include "semi_global_matching.h"
-#include <thread>
 
 #define USE_OPENMP
 #if defined(_OPENMP) && defined(USE_OPENMP)
@@ -48,6 +47,8 @@ static inline int min4(int x, int y, int z, int w)
 
 static void census9x7(const cv::Mat& src, cv::Mat1u64& dst)
 {
+	memset(dst.data, 0, dst.rows * dst.cols * sizeof(uint64_t));
+
 	const int RADIUS_U = 9 / 2;
 	const int RADIUS_V = 7 / 2;
 	int v;
@@ -72,6 +73,8 @@ static void census9x7(const cv::Mat& src, cv::Mat1u64& dst)
 
 static void symmetricCensus9x7(const cv::Mat& src, cv::Mat1u32& dst)
 {
+	memset(dst.data, 0, dst.rows * dst.cols * sizeof(uint32_t));
+
 	const int RADIUS_U = 9 / 2;
 	const int RADIUS_V = 7 / 2;
 
@@ -112,57 +115,30 @@ static void symmetricCensus9x7(const cv::Mat& src, cv::Mat1u32& dst)
 }
 
 template <typename T>
-static void calcMatchingCost(const cv::Mat_<T>& census1, const cv::Mat_<T>& census2, cv::Mat1w& MC, int n)
+static inline void updateCost(const T* census1, const T* census2, const ushort* Lp, ushort* Lc, int u, int n, int P1, int P2)
 {
-	const int h = census1.rows;
-	const int w = census1.cols;
-	int v;
-#pragma OMP_PARALLEL_FOR
-	for (v = 0; v < h; v++)
-	{
-		const T* _census1 = census1.ptr<T>(v);
-		const T* _census2 = census2.ptr<T>(v);
-		for (int u = 0; u < n; u++)
-		{
-			ushort* _MC = MC.ptr<ushort>(v, u);
-			for (int d = 0; d <= u; d++)
-			{
-				const T c1 = _census1[u];
-				const T c2 = _census2[u - d];
-				_MC[d] = static_cast<ushort>(HammingDistance(c1, c2));
-			}
-			for (int d = u + 1; d < n; d++)
-			{
-				_MC[d] = 64;
-			}
-		}
-		for (int u = n; u < w; u++)
-		{
-			ushort* _MC = MC.ptr<ushort>(v, u);
-			for (int d = 0; d < n; d++)
-			{
-				const T c1 = _census1[u];
-				const T c2 = _census2[u - d];
-				_MC[d] = static_cast<ushort>(HammingDistance(c1, c2));
-			}
-		}
-	}
-}
-
-static inline ushort updateCost(const ushort* MC, const ushort* Lp, ushort* Lc, int n, ushort minLp, int P1, int P2)
-{
-	ushort minLc = std::numeric_limits<ushort>::max();
 
 #ifdef WITH_SSE
 
-	const __m128i _minLp = _mm_set1_epi16(minLp);
+	__m128i _minLp = _mm_set1_epi16(-1);
+	for (int d = 0; d < n; d += 8)
+	{
+		__m128i _Lp = _mm_load_si128((__m128i*)&Lp[d]);
+		_minLp = _mm_min_epu16(_minLp, _Lp);
+	}
+	_minLp = _mm_set1_epi16(_mm_hmin_epu16(_minLp));
+
 	const __m128i _P1 = _mm_set1_epi16(P1);
 	const __m128i _P2 = _mm_set1_epi16(P2);
 	const __m128i _INF = _mm_set1_epi16(-1);
-	__m128i _minLc = _mm_set1_epi16(-1);
+	alignas(16) ushort MC[8];
 	for (int d = 0; d < n; d += 8)
 	{
-		const __m128i _MC = _mm_load_si128((__m128i*)&MC[d]);
+		for (int i = 0; i < 8; i++)
+			MC[i] = u - (d + i) >= 0 ? HammingDistance(census1[u], census2[u - (d + i)]) : 64;
+
+		const __m128i _MC = _mm_load_si128((__m128i*)MC);
+
 		__m128i _Lp0 = _mm_load_si128((__m128i*)&Lp[d]);
 		__m128i _Lp1 = d > 0 ? _mm_loadu_si128((__m128i*)&Lp[d - 1]) : _mm_alignr_epi8(_Lp0, _INF, 14);
 		__m128i _Lp2 = d < n - 8 ? _mm_loadu_si128((__m128i*)&Lp[d + 1]) : _mm_alignr_epi8(_INF, _Lp0, 2);
@@ -172,62 +148,43 @@ static inline ushort updateCost(const ushort* MC, const ushort* Lp, ushort* Lc, 
 		_Lp0 = _mm_min_epu16(_Lp0, _Lp1);
 		const __m128i _Lc = _mm_subs_epu16(_mm_adds_epu16(_MC, _Lp0), _minLp);
 		_mm_store_si128((__m128i*)&Lc[d], _Lc);
-		_minLc = _mm_min_epu16(_minLc, _Lc);
 	}
-
-	minLc = _mm_hmin_epu16(_minLc);
 
 #else
 
+	ushort minLp = std::numeric_limits<ushort>::max();
+	for (int d = 0; d < n; d++)
+		minLp = std::min(minLp, Lp[d]);
+
 	for (int d = 0; d < n; d++)
 	{
+		const int MC = u - d >= 0 ? HammingDistance(census1[u], census2[u - d]) : 64;
 		const int Lp0 = Lp[d];
 		const int Lp1 = d > 0 ? Lp[d - 1] + P1 : 0xFFFF;
 		const int Lp2 = d < n - 1 ? Lp[d + 1] + P1 : 0xFFFF;
 		const int Lp3 = minLp + P2;
-		Lc[d] = static_cast<ushort>(MC[d] + min4(Lp0, Lp1, Lp2, Lp3) - minLp);
-		minLc = std::min(minLc, Lc[d]);
+		Lc[d] = static_cast<ushort>(MC + min4(Lp0, Lp1, Lp2, Lp3) - minLp);
 	}
 
 #endif
-
-	return minLc;
 }
 
-static inline ushort updateCost(const ushort* MC, ushort* Lc, int n)
+template <typename T>
+static inline void updateCost(const T* census1, const T* census2, ushort* Lc, int u, int n)
 {
-	ushort minLc = std::numeric_limits<ushort>::max();
-
-#ifdef WITH_SSE
-
-	__m128i _minLc = _mm_set1_epi16(-1);
-	for (int d = 0; d < n; d += 8)
-	{
-		const __m128i _Lc = _mm_load_si128((__m128i*)&MC[d]);
-		_mm_store_si128((__m128i*)&Lc[d], _Lc);
-		_minLc = _mm_min_epu16(_minLc, _Lc);
-	}
-
-	minLc = _mm_hmin_epu16(_minLc);
-
-#else
-
 	for (int d = 0; d < n; d++)
 	{
-		Lc[d] = MC[d];
-		minLc = std::min(minLc, Lc[d]);
+		const int MC = u - d >= 0 ? HammingDistance(census1[u], census2[u - d]) : 64;
+		Lc[d] = MC;
 	}
-
-#endif
-
-	return minLc;
 }
 
-static void scanCost(const cv::Mat1w& MC, cv::Mat1w& L, cv::Mat1w& minL, int P1, int P2, int ru, int rv)
+template <typename T>
+static void scanCost(const cv::Mat_<T>& C1, const cv::Mat_<T>& C2, cv::Mat1w& L, int P1, int P2, int ru, int rv)
 {
-	const int h = MC.size[0];
-	const int w = MC.size[1];
-	const int n = MC.size[2];
+	const int h = L.size[0];
+	const int w = L.size[1];
+	const int n = L.size[2];
 
 	const bool forward = rv > 0 || (rv == 0 && ru > 0);
 	int u0 = 0, u1 = w, du = 1, v0 = 0, v1 = h, dv = 1;
@@ -239,24 +196,26 @@ static void scanCost(const cv::Mat1w& MC, cv::Mat1w& L, cv::Mat1w& minL, int P1,
 
 	for (int vc = v0; vc != v1; vc += dv)
 	{
-		const int vp = vc - rv;
-		ushort* _minLc = minL.ptr<ushort>(vc);
-		ushort* _minLp = (ushort*)(minL.data + minL.step.p[0] * vp); // for CV_DbgAssert avoidance
+		const T* _census1 = C1.ptr<T>(vc);
+		const T* _census2 = C2.ptr<T>(vc);
 		for (int uc = u0; uc != u1; uc += du)
 		{
+			const int vp = vc - rv;
 			const int up = uc - ru;
-			const ushort* _MC = MC.ptr<ushort>(vc, uc);
+			const bool inside = vp >= 0 && vp < h && up >= 0 && up < w;
+
 			ushort* _Lc = L.ptr<ushort>(vc, uc);
 			ushort* _Lp = (ushort*)(L.data + vp * L.step.p[0] + up * L.step.p[1]); // for CV_DbgAssert avoidance
 
-			const bool inside = vp >= 0 && vp < h && up >= 0 && up < w;
-			const ushort minLc = inside ? updateCost(_MC, _Lp, _Lc, n, _minLp[up], P1, P2) : updateCost(_MC, _Lc, n);
-			_minLc[uc] = minLc;
+			if (inside)
+				updateCost(_census1, _census2, _Lp, _Lc, uc, n, P1, P2);
+			else
+				updateCost(_census1, _census2, _Lc, uc, n);
 		}
 	}
 }
 
-static int winnerTakesAll(const ushort* L0, const ushort* L1, const ushort* L2, const ushort* L3,
+static inline int winnerTakesAll(const ushort* L0, const ushort* L1, const ushort* L2, const ushort* L3,
 	const ushort* L4, const ushort* L5, const ushort* L6, const ushort* L7, ushort* S, int n)
 {
 	int minS = std::numeric_limits<int>::max();
@@ -311,19 +270,19 @@ static int winnerTakesAll(const ushort* L0, const ushort* L1, const ushort* L2, 
 	return disp;
 }
 
-static void calcDisparity(const std::vector<cv::Mat1w>& L, cv::Mat& D1, cv::Mat& D2, cv::Mat1w& S, int DISP_SCALE)
+static void calcDisparity(std::vector<cv::Mat1w>& L, cv::Mat& D1, cv::Mat& D2, int DISP_SCALE)
 {
+	cv::Mat1w& S = L[0];
 	const int h = S.size[0];
 	const int w = S.size[1];
 	const int n = S.size[2];
-	S = 0;
 
 	int v;
 #pragma OMP_PARALLEL_FOR
 	for (v = 0; v < h; v++)
 	{
-		ushort* _D1 = D1.ptr<ushort>(v);
-		ushort* _D2 = D2.ptr<ushort>(v);
+		short* _D1 = D1.ptr<short>(v);
+		short* _D2 = D2.ptr<short>(v);
 		for (int u = 0; u < w; u++)
 		{
 			ushort* _S = S.ptr<ushort>(v, u);
@@ -350,7 +309,7 @@ static void calcDisparity(const std::vector<cv::Mat1w>& L, cv::Mat& D1, cv::Mat&
 				disp *= DISP_SCALE;
 			}
 
-			_D1[u] = static_cast<ushort>(disp);
+			_D1[u] = static_cast<short>(disp);
 		}
 
 		// calculate right disparity
@@ -367,7 +326,7 @@ static void calcDisparity(const std::vector<cv::Mat1w>& L, cv::Mat& D1, cv::Mat&
 					disp = d;
 				}
 			}
-			_D2[u] = static_cast<ushort>(DISP_SCALE * disp);
+			_D2[u] = static_cast<short>(DISP_SCALE * disp);
 		}
 	}
 }
@@ -380,8 +339,8 @@ static void LRConsistencyCheck(cv::Mat& D1, cv::Mat& D2, int max12Diff, int DISP
 #pragma OMP_PARALLEL_FOR
 	for (v = 0; v < h; v++)
 	{
-		ushort* _D1 = D1.ptr<ushort>(v);
-		ushort* _D2 = D2.ptr<ushort>(v);
+		short* _D1 = D1.ptr<short>(v);
+		short* _D2 = D2.ptr<short>(v);
 		for (int u = 0; u < w; u++)
 		{
 			const int d = _D1[u] >> DISP_SHIFT;
@@ -409,15 +368,22 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 	const int NUM_DIRECTIONS = 8;
 	const int ru[NUM_DIRECTIONS] = { 1, 1, 0, -1, -1, -1, 0, 1 };
 	const int rv[NUM_DIRECTIONS] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+	L.resize(NUM_DIRECTIONS);
 
-	MC.create(3, dims);
 	if (param_.censusType == CENSUS_9x7)
 	{
 		census64[0].create(h, w);
 		census64[1].create(h, w);
 		census9x7(I1, census64[0]);
 		census9x7(I2, census64[1]);
-		calcMatchingCost(census64[0], census64[1], MC, n);
+
+		int dir;
+#pragma OMP_PARALLEL_FOR
+		for (dir = 0; dir < NUM_DIRECTIONS; dir++)
+		{
+			L[dir].create(3, dims);
+			scanCost(census64[0], census64[1], L[dir], param_.P1, param_.P2, ru[dir], rv[dir]);
+		}
 	}
 	else if (param_.censusType == SYMMETRIC_CENSUS_9x7)
 	{
@@ -425,31 +391,23 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 		census32[1].create(h, w);
 		symmetricCensus9x7(I1, census32[0]);
 		symmetricCensus9x7(I2, census32[1]);
-		calcMatchingCost(census32[0], census32[1], MC, n);
+
+		int dir;
+#pragma OMP_PARALLEL_FOR
+		for (dir = 0; dir < NUM_DIRECTIONS; dir++)
+		{
+			L[dir].create(3, dims);
+			scanCost(census32[0], census32[1], L[dir], param_.P1, param_.P2, ru[dir], rv[dir]);
+		}
 	}
 	else
 	{
 		CV_Error(cv::Error::StsInternal, "No such mode");
 	}
 
-	L.resize(NUM_DIRECTIONS);
-	minL.resize(NUM_DIRECTIONS);
-
-	std::vector<std::thread> threads(NUM_DIRECTIONS);
-	for (int dir = 0; dir < NUM_DIRECTIONS; dir++)
-	{
-		L[dir].create(3, dims);
-		minL[dir].create(h, w);
-		threads[dir] = std::thread(scanCost, std::cref(MC), std::ref(L[dir]), std::ref(minL[dir]),
-			param_.P1, param_.P2, ru[dir], rv[dir]);
-	}
-	for (int dir = 0; dir < NUM_DIRECTIONS; dir++)
-		threads[dir].join();
-
-	D1.create(h, w, CV_16U);
-	D2.create(h, w, CV_16U);
-	S.create(3, dims);
-	calcDisparity(L, D1, D2, S, DISP_SCALE);
+	D1.create(h, w, CV_16S);
+	D2.create(h, w, CV_16S);
+	calcDisparity(L, D1, D2, DISP_SCALE);
 
 	if (param_.medianKernelSize > 0)
 	{

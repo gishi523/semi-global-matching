@@ -9,7 +9,7 @@ public:
 
 	static const int DISP_SHIFT = 4;
 	static const int DISP_SCALE = (1 << DISP_SHIFT);
-	static const int DISP_INV = static_cast<ushort>(-1);
+	static const int DISP_INV = -DISP_SCALE;
 	
 	enum CensusType
 	{
@@ -45,8 +45,7 @@ private:
 
 	cv::Mat_<uint32_t> census32[2];
 	cv::Mat_<uint64_t> census64[2];
-	cv::Mat1w MC, S;
-	std::vector<cv::Mat1w> L, minL;
+	std::vector<cv::Mat1w> L;
 
 	Parameters param_;
 };
