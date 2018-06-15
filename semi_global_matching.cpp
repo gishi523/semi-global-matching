@@ -2,7 +2,11 @@
 
 #define USE_OPENMP
 #if defined(_OPENMP) && defined(USE_OPENMP)
-#define OMP_PARALLEL_FOR omp parallel for
+#ifdef _WIN32
+#define OMP_PARALLEL_FOR __pragma(omp parallel for)
+#else
+#define OMP_PARALLEL_FOR _Pragma("omp parallel for")
+#endif
 #else
 #define OMP_PARALLEL_FOR
 #endif
@@ -31,13 +35,8 @@ namespace cv
 	using Mat1u64 = Mat_<uint64_t>;
 }
 
-template <typename T>
-static inline int HammingDistance(T c1, T c2) { return 0; }
-
-template <>
 static inline int HammingDistance(uint64_t c1, uint64_t c2) { return static_cast<int>(popcnt64(c1 ^ c2)); }
 
-template <>
 static inline int HammingDistance(uint32_t c1, uint32_t c2) { return static_cast<int>(popcnt32(c1 ^ c2)); }
 
 static inline int min4(int x, int y, int z, int w)
@@ -52,7 +51,7 @@ static void census9x7(const cv::Mat& src, cv::Mat1u64& dst)
 	const int RADIUS_U = 9 / 2;
 	const int RADIUS_V = 7 / 2;
 	int v;
-#pragma OMP_PARALLEL_FOR
+OMP_PARALLEL_FOR
 	for (v = RADIUS_V; v < src.rows - RADIUS_V; v++)
 	{
 		for (int u = RADIUS_U; u < src.cols - RADIUS_U; u++)
@@ -79,7 +78,7 @@ static void symmetricCensus9x7(const cv::Mat& src, cv::Mat1u32& dst)
 	const int RADIUS_V = 7 / 2;
 
 	int v;
-#pragma OMP_PARALLEL_FOR
+OMP_PARALLEL_FOR
 	for (v = RADIUS_V; v < src.rows - RADIUS_V; v++)
 	{
 		for (int u = RADIUS_U; u < src.cols - RADIUS_U; u++)
@@ -278,7 +277,7 @@ static void calcDisparity(std::vector<cv::Mat1w>& L, cv::Mat& D1, cv::Mat& D2, i
 	const int n = S.size[2];
 
 	int v;
-#pragma OMP_PARALLEL_FOR
+OMP_PARALLEL_FOR
 	for (v = 0; v < h; v++)
 	{
 		short* _D1 = D1.ptr<short>(v);
@@ -336,7 +335,7 @@ static void LRConsistencyCheck(cv::Mat& D1, cv::Mat& D2, int max12Diff, int DISP
 	const int h = D1.rows;
 	const int w = D1.cols;
 	int v;
-#pragma OMP_PARALLEL_FOR
+OMP_PARALLEL_FOR
 	for (v = 0; v < h; v++)
 	{
 		short* _D1 = D1.ptr<short>(v);
@@ -378,7 +377,7 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 		census9x7(I2, census64[1]);
 
 		int dir;
-#pragma OMP_PARALLEL_FOR
+OMP_PARALLEL_FOR
 		for (dir = 0; dir < NUM_DIRECTIONS; dir++)
 		{
 			L[dir].create(3, dims);
@@ -393,7 +392,7 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 		symmetricCensus9x7(I2, census32[1]);
 
 		int dir;
-#pragma OMP_PARALLEL_FOR
+OMP_PARALLEL_FOR
 		for (dir = 0; dir < NUM_DIRECTIONS; dir++)
 		{
 			L[dir].create(3, dims);

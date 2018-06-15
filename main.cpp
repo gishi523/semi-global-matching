@@ -1,4 +1,3 @@
-#include <opencv2/opencv.hpp>
 #include <chrono>
 #include "semi_global_matching.h"
 

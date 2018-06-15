@@ -1,6 +1,7 @@
 #ifndef __SEMI_GLOBAL_MATCHING_H__
 #define __SEMI_GLOBAL_MATCHING_H__
 
+#define OPENCV_TRAITS_ENABLE_DEPRECATED
 #include <opencv2/opencv.hpp>
 
 class SemiGlobalMatching
