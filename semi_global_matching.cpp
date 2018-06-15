@@ -195,8 +195,8 @@ static void scanCost(const cv::Mat_<T>& C1, const cv::Mat_<T>& C2, cv::Mat1w& L,
 
 	for (int vc = v0; vc != v1; vc += dv)
 	{
-		const T* _census1 = C1.ptr<T>(vc);
-		const T* _census2 = C2.ptr<T>(vc);
+		const T* _census1 = C1.template ptr<T>(vc);
+		const T* _census2 = C2.template ptr<T>(vc);
 		for (int uc = u0; uc != u1; uc += du)
 		{
 			const int vp = vc - rv;
