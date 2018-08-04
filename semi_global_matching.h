@@ -30,8 +30,8 @@ public:
 		// default settings
 		Parameters()
 		{
-			P1 = 20;
-			P2 = 100;
+			P1 = 10;
+			P2 = 120;
 			numDisparities = 64;
 			max12Diff = 5;
 			medianKernelSize = 3;
