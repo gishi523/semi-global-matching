@@ -22,11 +22,16 @@
 #define WITH_SSE
 #ifdef WITH_SSE
 #include <smmintrin.h>
-static inline int _mm_hmin_epu16(__m128i v)
+
+static inline int _mm_hmin_epu8(__m128i v)
 {
-	const __m128i minpos = _mm_minpos_epu16(v);
-	return _mm_extract_epi16(minpos, 0);
+	v = _mm_min_epu8(v, _mm_shuffle_epi32(v, _MM_SHUFFLE(3, 2, 3, 2)));
+	v = _mm_min_epu8(v, _mm_shuffle_epi32(v, _MM_SHUFFLE(1, 1, 1, 1)));
+	v = _mm_min_epu8(v, _mm_shufflelo_epi16(v, _MM_SHUFFLE(1, 1, 1, 1)));
+	v = _mm_min_epu8(v, _mm_srli_epi16(v, 8));
+	return static_cast<uchar>(_mm_cvtsi128_si32(v));
 }
+
 #endif
 
 namespace cv
@@ -34,6 +39,8 @@ namespace cv
 	using Mat1u32 = Mat_<uint32_t>;
 	using Mat1u64 = Mat_<uint64_t>;
 }
+
+static const int DEFAULT_MC = 64;
 
 static inline int HammingDistance(uint64_t c1, uint64_t c2) { return static_cast<int>(popcnt64(c1 ^ c2)); }
 
@@ -114,72 +121,83 @@ OMP_PARALLEL_FOR
 }
 
 template <typename T>
-static inline void updateCost(const T* census1, const T* census2, const ushort* Lp, ushort* Lc, int u, int n, int P1, int P2)
+static inline void updateCost(const T* census1, const T* census2, const uchar* Lp, uchar* Lc, int u, int n, int P1, int P2)
 {
 
 #ifdef WITH_SSE
 
-	__m128i _minLp = _mm_set1_epi16(-1);
-	for (int d = 0; d < n; d += 8)
+	__m128i _minLp = _mm_set1_epi8(-1);
+	for (int d = 0; d < n; d += 16)
 	{
 		__m128i _Lp = _mm_load_si128((__m128i*)&Lp[d]);
-		_minLp = _mm_min_epu16(_minLp, _Lp);
+		_minLp = _mm_min_epu8(_minLp, _Lp);
 	}
-	_minLp = _mm_set1_epi16(_mm_hmin_epu16(_minLp));
 
-	const __m128i _P1 = _mm_set1_epi16(P1);
-	const __m128i _P2 = _mm_set1_epi16(P2);
-	const __m128i _INF = _mm_set1_epi16(-1);
-	alignas(16) ushort MC[8];
-	for (int d = 0; d < n; d += 8)
+	const uchar minLp = _mm_hmin_epu8(_minLp);
+	P1 -= minLp;
+
+	const __m128i _P1 = _mm_set1_epi8(P1);
+	const __m128i _P2 = _mm_set1_epi8(P2);
+	const __m128i _INF = _mm_set1_epi8(255 - P1);
+	_minLp = _mm_set1_epi8(minLp);
+
+	alignas(16) uchar MC[16];
+	for (int d = 0; d < n; d += 16)
 	{
-		for (int i = 0; i < 8; i++)
-			MC[i] = u - (d + i) >= 0 ? HammingDistance(census1[u], census2[u - (d + i)]) : 64;
+		for (int i = 0; i < 16; i++)
+			MC[i] = u - (d + i) >= 0 ? HammingDistance(census1[u], census2[u - (d + i)]) : DEFAULT_MC;
 
 		const __m128i _MC = _mm_load_si128((__m128i*)MC);
 
 		__m128i _Lp0 = _mm_load_si128((__m128i*)&Lp[d]);
-		__m128i _Lp1 = d > 0 ? _mm_loadu_si128((__m128i*)&Lp[d - 1]) : _mm_alignr_epi8(_Lp0, _INF, 14);
-		__m128i _Lp2 = d < n - 8 ? _mm_loadu_si128((__m128i*)&Lp[d + 1]) : _mm_alignr_epi8(_INF, _Lp0, 2);
-		__m128i _Lp3 = _mm_adds_epu16(_minLp, _P2);
-		_Lp0 = _mm_min_epu16(_Lp0, _mm_adds_epu16(_Lp1, _P1));
-		_Lp1 = _mm_min_epu16(_Lp3, _mm_adds_epu16(_Lp2, _P1));
-		_Lp0 = _mm_min_epu16(_Lp0, _Lp1);
-		const __m128i _Lc = _mm_subs_epu16(_mm_adds_epu16(_MC, _Lp0), _minLp);
+		__m128i _Lp1 = d > 0 ? _mm_loadu_si128((__m128i*)&Lp[d - 1]) : _mm_alignr_epi8(_Lp0, _INF, 15);
+		__m128i _Lp2 = d < n - 16 ? _mm_loadu_si128((__m128i*)&Lp[d + 1]) : _mm_alignr_epi8(_INF, _Lp0, 1);
+
+		_Lp0 = _mm_sub_epi8(_Lp0, _minLp);
+		_Lp1 = _mm_add_epi8(_Lp1, _P1);
+		_Lp2 = _mm_add_epi8(_Lp2, _P1);
+
+		_Lp0 = _mm_min_epu8(_Lp0, _P2);
+		_Lp1 = _mm_min_epu8(_Lp1, _Lp2);
+
+		_Lp0 = _mm_min_epu8(_Lp0, _Lp1);
+
+		const __m128i _Lc = _mm_adds_epu8(_MC, _Lp0);
 		_mm_store_si128((__m128i*)&Lc[d], _Lc);
 	}
 
 #else
 
-	ushort minLp = std::numeric_limits<ushort>::max();
+	uchar minLp = std::numeric_limits<uchar>::max();
 	for (int d = 0; d < n; d++)
 		minLp = std::min(minLp, Lp[d]);
 
+	uchar _P1 = P1 - minLp;
 	for (int d = 0; d < n; d++)
 	{
-		const int MC = u - d >= 0 ? HammingDistance(census1[u], census2[u - d]) : 64;
-		const int Lp0 = Lp[d];
-		const int Lp1 = d > 0 ? Lp[d - 1] + P1 : 0xFFFF;
-		const int Lp2 = d < n - 1 ? Lp[d + 1] + P1 : 0xFFFF;
-		const int Lp3 = minLp + P2;
-		Lc[d] = static_cast<ushort>(MC + min4(Lp0, Lp1, Lp2, Lp3) - minLp);
+		const uchar MC = u - d >= 0 ? HammingDistance(census1[u], census2[u - d]) : DEFAULT_MC;
+		const uchar Lp0 = Lp[d] - minLp;
+		const uchar Lp1 = d > 0 ? Lp[d - 1] + _P1 : 0xFF;
+		const uchar Lp2 = d < n - 1 ? Lp[d + 1] + _P1 : 0xFF;
+		const uchar Lp3 = P2;
+		Lc[d] = static_cast<uchar>(MC + min4(Lp0, Lp1, Lp2, Lp3));
 	}
 
 #endif
 }
 
 template <typename T>
-static inline void updateCost(const T* census1, const T* census2, ushort* Lc, int u, int n)
+static inline void updateCost(const T* census1, const T* census2, uchar* Lc, int u, int n)
 {
 	for (int d = 0; d < n; d++)
 	{
-		const int MC = u - d >= 0 ? HammingDistance(census1[u], census2[u - d]) : 64;
+		const int MC = u - d >= 0 ? HammingDistance(census1[u], census2[u - d]) : DEFAULT_MC;
 		Lc[d] = MC;
 	}
 }
 
 template <typename T>
-static void scanCost(const cv::Mat_<T>& C1, const cv::Mat_<T>& C2, cv::Mat1w& L, int P1, int P2, int ru, int rv)
+static void scanCost(const cv::Mat_<T>& C1, const cv::Mat_<T>& C2, cv::Mat1b& L, int P1, int P2, int ru, int rv)
 {
 	const int h = L.size[0];
 	const int w = L.size[1];
@@ -203,8 +221,8 @@ static void scanCost(const cv::Mat_<T>& C1, const cv::Mat_<T>& C2, cv::Mat1w& L,
 			const int up = uc - ru;
 			const bool inside = vp >= 0 && vp < h && up >= 0 && up < w;
 
-			ushort* _Lc = L.ptr<ushort>(vc, uc);
-			ushort* _Lp = (ushort*)(L.data + vp * L.step.p[0] + up * L.step.p[1]); // for CV_DbgAssert avoidance
+			uchar* _Lc = L.ptr<uchar>(vc, uc);
+			uchar* _Lp = (uchar*)(L.data + vp * L.step.p[0] + up * L.step.p[1]); // for CV_DbgAssert avoidance
 
 			if (inside)
 				updateCost(_census1, _census2, _Lp, _Lc, uc, n, P1, P2);
@@ -214,15 +232,16 @@ static void scanCost(const cv::Mat_<T>& C1, const cv::Mat_<T>& C2, cv::Mat1w& L,
 	}
 }
 
-static inline int winnerTakesAll(const ushort* L0, const ushort* L1, const ushort* L2, const ushort* L3,
-	const ushort* L4, const ushort* L5, const ushort* L6, const ushort* L7, ushort* S, int n)
+static inline int winnerTakesAll(const uchar* L0, const uchar* L1, const uchar* L2, const uchar* L3,
+	const uchar* L4, const uchar* L5, const uchar* L6, const uchar* L7, ushort* S, int n)
 {
 	int minS = std::numeric_limits<int>::max();
 	int disp = 0;
 
 #ifdef WITH_SSE
 
-	for (int d = 0; d < n; d += 8)
+	__m128i _zero = _mm_setzero_si128();
+	for (int d = 0; d < n; d += 16)
 	{
 		__m128i _L0 = _mm_load_si128((__m128i*)&L0[d]);
 		__m128i _L1 = _mm_load_si128((__m128i*)&L1[d]);
@@ -233,22 +252,59 @@ static inline int winnerTakesAll(const ushort* L0, const ushort* L1, const ushor
 		__m128i _L6 = _mm_load_si128((__m128i*)&L6[d]);
 		__m128i _L7 = _mm_load_si128((__m128i*)&L7[d]);
 
-		_L0 = _mm_adds_epu16(_L0, _L1);
-		_L2 = _mm_adds_epu16(_L2, _L3);
-		_L4 = _mm_adds_epu16(_L4, _L5);
-		_L6 = _mm_adds_epu16(_L6, _L7);
+		// sign extension
+		__m128i _L0_0 = _mm_unpacklo_epi8(_L0, _zero);
+		__m128i _L0_1 = _mm_unpackhi_epi8(_L0, _zero);
+		__m128i _L1_0 = _mm_unpacklo_epi8(_L1, _zero);
+		__m128i _L1_1 = _mm_unpackhi_epi8(_L1, _zero);
+		__m128i _L2_0 = _mm_unpacklo_epi8(_L2, _zero);
+		__m128i _L2_1 = _mm_unpackhi_epi8(_L2, _zero);
+		__m128i _L3_0 = _mm_unpacklo_epi8(_L3, _zero);
+		__m128i _L3_1 = _mm_unpackhi_epi8(_L3, _zero);
+		__m128i _L4_0 = _mm_unpacklo_epi8(_L4, _zero);
+		__m128i _L4_1 = _mm_unpackhi_epi8(_L4, _zero);
+		__m128i _L5_0 = _mm_unpacklo_epi8(_L5, _zero);
+		__m128i _L5_1 = _mm_unpackhi_epi8(_L5, _zero);
+		__m128i _L6_0 = _mm_unpacklo_epi8(_L6, _zero);
+		__m128i _L6_1 = _mm_unpackhi_epi8(_L6, _zero);
+		__m128i _L7_0 = _mm_unpacklo_epi8(_L7, _zero);
+		__m128i _L7_1 = _mm_unpackhi_epi8(_L7, _zero);
 
-		_L0 = _mm_adds_epu16(_L0, _L2);
-		_L4 = _mm_adds_epu16(_L4, _L6);
+		// add costs
+		_L0_0 = _mm_adds_epu16(_L0_0, _L1_0);
+		_L0_1 = _mm_adds_epu16(_L0_1, _L1_1);
+		_L2_0 = _mm_adds_epu16(_L2_0, _L3_0);
+		_L2_1 = _mm_adds_epu16(_L2_1, _L3_1);
+		_L4_0 = _mm_adds_epu16(_L4_0, _L5_0);
+		_L4_1 = _mm_adds_epu16(_L4_1, _L5_1);
+		_L6_0 = _mm_adds_epu16(_L6_0, _L7_0);
+		_L6_1 = _mm_adds_epu16(_L6_1, _L7_1);
 
-		const __m128i _S = _mm_adds_epu16(_L0, _L4);
-		const __m128i _minS = _mm_minpos_epu16(_S);
-		_mm_store_si128((__m128i*)&S[d], _S);
-		const int S = _mm_extract_epi16(_minS, 0);
-		if (S < minS)
+		_L0_0 = _mm_adds_epu16(_L0_0, _L2_0);
+		_L0_1 = _mm_adds_epu16(_L0_1, _L2_1);
+		_L4_0 = _mm_adds_epu16(_L4_0, _L6_0);
+		_L4_1 = _mm_adds_epu16(_L4_1, _L6_1);
+
+		const __m128i _S_0 = _mm_adds_epu16(_L0_0, _L4_0);
+		const __m128i _S_1 = _mm_adds_epu16(_L0_1, _L4_1);
+
+		const __m128i _minS_0 = _mm_minpos_epu16(_S_0);
+		const __m128i _minS_1 = _mm_minpos_epu16(_S_1);
+		_mm_store_si128((__m128i*)&S[d + 0], _S_0);
+		_mm_store_si128((__m128i*)&S[d + 8], _S_1);
+
+		const int S_0 = _mm_extract_epi16(_minS_0, 0);
+		const int S_1 = _mm_extract_epi16(_minS_1, 0);
+
+		if (S_0 < minS)
 		{
-			minS = S;
-			disp = _mm_extract_epi16(_minS, 1) + d;
+			minS = S_0;
+			disp = _mm_extract_epi16(_minS_0, 1) + d + 0;
+		}
+		if (S_1 < minS)
+		{
+			minS = S_1;
+			disp = _mm_extract_epi16(_minS_1, 1) + d + 8;
 		}
 	}
 
@@ -269,9 +325,8 @@ static inline int winnerTakesAll(const ushort* L0, const ushort* L1, const ushor
 	return disp;
 }
 
-static void calcDisparity(std::vector<cv::Mat1w>& L, cv::Mat& D1, cv::Mat& D2, int DISP_SCALE)
+static void calcDisparity(const std::vector<cv::Mat1b>& L, cv::Mat1w& S, cv::Mat& D1, cv::Mat& D2, int DISP_SCALE)
 {
-	cv::Mat1w& S = L[0];
 	const int h = S.size[0];
 	const int w = S.size[1];
 	const int n = S.size[2];
@@ -285,14 +340,14 @@ OMP_PARALLEL_FOR
 		for (int u = 0; u < w; u++)
 		{
 			ushort* _S = S.ptr<ushort>(v, u);
-			const ushort* _L0 = L[0].ptr<ushort>(v, u);
-			const ushort* _L1 = L[1].ptr<ushort>(v, u);
-			const ushort* _L2 = L[2].ptr<ushort>(v, u);
-			const ushort* _L3 = L[3].ptr<ushort>(v, u);
-			const ushort* _L4 = L[4].ptr<ushort>(v, u);
-			const ushort* _L5 = L[5].ptr<ushort>(v, u);
-			const ushort* _L6 = L[6].ptr<ushort>(v, u);
-			const ushort* _L7 = L[7].ptr<ushort>(v, u);
+			const uchar* _L0 = L[0].ptr<uchar>(v, u);
+			const uchar* _L1 = L[1].ptr<uchar>(v, u);
+			const uchar* _L2 = L[2].ptr<uchar>(v, u);
+			const uchar* _L3 = L[3].ptr<uchar>(v, u);
+			const uchar* _L4 = L[4].ptr<uchar>(v, u);
+			const uchar* _L5 = L[5].ptr<uchar>(v, u);
+			const uchar* _L6 = L[6].ptr<uchar>(v, u);
+			const uchar* _L7 = L[7].ptr<uchar>(v, u);
 
 			int disp = winnerTakesAll(_L0, _L1, _L2, _L3, _L4, _L5, _L6, _L7, _S, n);
 
@@ -388,6 +443,7 @@ OMP_PARALLEL_FOR
 	{
 		census32[0].create(h, w);
 		census32[1].create(h, w);
+
 		symmetricCensus9x7(I1, census32[0]);
 		symmetricCensus9x7(I2, census32[1]);
 
@@ -404,9 +460,10 @@ OMP_PARALLEL_FOR
 		CV_Error(cv::Error::StsInternal, "No such mode");
 	}
 
+	S.create(3, dims);
 	D1.create(h, w, CV_16S);
 	D2.create(h, w, CV_16S);
-	calcDisparity(L, D1, D2, DISP_SCALE);
+	calcDisparity(L, S, D1, D2, DISP_SCALE);
 
 	if (param_.medianKernelSize > 0)
 	{

@@ -46,7 +46,8 @@ private:
 
 	cv::Mat_<uint32_t> census32[2];
 	cv::Mat_<uint64_t> census64[2];
-	std::vector<cv::Mat1w> L;
+	std::vector<cv::Mat1b> L;
+	cv::Mat1w S;
 
 	Parameters param_;
 };
