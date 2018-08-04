@@ -11,7 +11,7 @@ int main(int argc, char* argv[])
 
 	SemiGlobalMatching::Parameters param;
 	SemiGlobalMatching sgm(param);
-	cv::Mat D1, D2;
+	cv::Mat D1, D2, draw;
 	for (int frameno = 1;; frameno++)
 	{
 		char buf1[256];
@@ -45,11 +45,12 @@ int main(int argc, char* argv[])
 		const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
 		std::cout << "disparity computation time: " << duration << "[msec]" << std::endl;
 
-		D1.setTo(0, D1 == SemiGlobalMatching::DISP_INV);
-		D1.convertTo(D1, CV_32F, 1. / SemiGlobalMatching::DISP_SCALE);
+		D1.convertTo(draw, CV_8U, 255. / (SemiGlobalMatching::DISP_SCALE * param.numDisparities));
+		cv::applyColorMap(draw, draw, cv::COLORMAP_JET);
+		draw.setTo(0, D1 == SemiGlobalMatching::DISP_INV);
 
 		cv::imshow("image", I1);
-		cv::imshow("disparity", D1 / param.numDisparities);
+		cv::imshow("disparity", draw);
 		const char c = cv::waitKey(1);
 		if (c == 27)
 			break;
