@@ -32,6 +32,9 @@ static inline int _mm_hmin_epu8(__m128i v)
 	return static_cast<uchar>(_mm_cvtsi128_si32(v));
 }
 
+static inline __m128i _mm_set1_epi_(uint32_t v) { return _mm_set1_epi32(v); }
+static inline __m128i _mm_set1_epi_(uint64_t v) { return _mm_set1_epi64x(v); }
+
 #endif
 
 namespace cv
@@ -51,6 +54,7 @@ static inline int min4(int x, int y, int z, int w)
 	return std::min(std::min(x, y), std::min(z, w));
 };
 
+template <int VIEW = 0>
 static void census9x7(const cv::Mat& src, cv::Mat1u64& dst)
 {
 	memset(dst.data, 0, dst.rows * dst.cols * sizeof(uint64_t));
@@ -72,11 +76,15 @@ OMP_PARALLEL_FOR
 					c += src.ptr(v)[u] <= src.ptr(v + dv)[u + du] ? 0 : 1;
 				}
 			}
-			dst(v, u) = c;
+			if (VIEW == 0)
+				dst(v, u) = c;
+			else
+				dst(v, src.cols - 1 - u) = c;
 		}
 	}
 }
 
+template <int VIEW = 0>
 static void symmetricCensus9x7(const cv::Mat& src, cv::Mat1u32& dst)
 {
 	memset(dst.data, 0, dst.rows * dst.cols * sizeof(uint32_t));
@@ -115,13 +123,42 @@ OMP_PARALLEL_FOR
 					c += src.ptr(v1)[u1] <= src.ptr(v2)[u2] ? 0 : 1;
 				}
 			}
-			dst(v, u) = c;
+			if (VIEW == 0)
+				dst(v, u) = c;
+			else
+				dst(v, src.cols - 1 - u) = c;
 		}
 	}
 }
 
+#ifdef WITH_SSE
+static inline void calcMatchingCost16(__m128i _census1, const uint32_t* census2, uchar* MC)
+{
+	for (int i = 0; i < 16; i += 4)
+	{
+		__m128i _census2 = _mm_loadu_si128((__m128i*)&census2[i]);
+		__m128i _diff = _mm_xor_si128(_census1, _census2);
+		MC[i + 0] = static_cast<uchar>(popcnt32(_mm_extract_epi32(_diff, 0)));
+		MC[i + 1] = static_cast<uchar>(popcnt32(_mm_extract_epi32(_diff, 1)));
+		MC[i + 2] = static_cast<uchar>(popcnt32(_mm_extract_epi32(_diff, 2)));
+		MC[i + 3] = static_cast<uchar>(popcnt32(_mm_extract_epi32(_diff, 3)));
+	}
+}
+
+static inline void calcMatchingCost16(__m128i _census1, const uint64_t* census2, uchar* MC)
+{
+	for (int i = 0; i < 16; i += 2)
+	{
+		__m128i _census2 = _mm_loadu_si128((__m128i*)&census2[i]);
+		__m128i _diff = _mm_xor_si128(_census1, _census2);
+		MC[i + 0] = static_cast<uchar>(popcnt64(_mm_extract_epi64(_diff, 0)));
+		MC[i + 1] = static_cast<uchar>(popcnt64(_mm_extract_epi64(_diff, 1)));
+	}
+}
+#endif
+
 template <typename T>
-static inline void updateCost(const T* census1, const T* census2, const uchar* Lp, uchar* Lc, int u, int n, int P1, int P2)
+static inline void updateCost(T census1, const T* census2, const uchar* Lp, uchar* Lc, int u, int n, int P1, int P2)
 {
 
 #ifdef WITH_SSE
@@ -136,6 +173,7 @@ static inline void updateCost(const T* census1, const T* census2, const uchar* L
 	const uchar minLp = _mm_hmin_epu8(_minLp);
 	P1 -= minLp;
 
+	const __m128i _census1 = _mm_set1_epi_(census1);
 	const __m128i _P1 = _mm_set1_epi8(P1);
 	const __m128i _P2 = _mm_set1_epi8(P2);
 	const __m128i _INF = _mm_set1_epi8(255 - P1);
@@ -144,8 +182,15 @@ static inline void updateCost(const T* census1, const T* census2, const uchar* L
 	alignas(16) uchar MC[16];
 	for (int d = 0; d < n; d += 16)
 	{
-		for (int i = 0; i < 16; i++)
-			MC[i] = u - (d + i) >= 0 ? HammingDistance(census1[u], census2[u - (d + i)]) : DEFAULT_MC;
+		if (u >= n - 1)
+		{
+			calcMatchingCost16(_census1, census2 + d, MC);
+		}
+		else
+		{
+			for (int i = 0; i < 16; i++)
+				MC[i] = u - (d + i) >= 0 ? HammingDistance(census1, census2[d + i]) : DEFAULT_MC;
+}
 
 		const __m128i _MC = _mm_load_si128((__m128i*)MC);
 
@@ -175,7 +220,7 @@ static inline void updateCost(const T* census1, const T* census2, const uchar* L
 	uchar _P1 = P1 - minLp;
 	for (int d = 0; d < n; d++)
 	{
-		const uchar MC = u - d >= 0 ? HammingDistance(census1[u], census2[u - d]) : DEFAULT_MC;
+		const uchar MC = u - d >= 0 ? HammingDistance(census1, census2[d]) : DEFAULT_MC;
 		const uchar Lp0 = Lp[d] - minLp;
 		const uchar Lp1 = d > 0 ? Lp[d - 1] + _P1 : 0xFF;
 		const uchar Lp2 = d < n - 1 ? Lp[d + 1] + _P1 : 0xFF;
@@ -187,11 +232,11 @@ static inline void updateCost(const T* census1, const T* census2, const uchar* L
 }
 
 template <typename T>
-static inline void updateCost(const T* census1, const T* census2, uchar* Lc, int u, int n)
+static inline void updateCost(T census1, const T* census2, uchar* Lc, int u, int n)
 {
 	for (int d = 0; d < n; d++)
 	{
-		const int MC = u - d >= 0 ? HammingDistance(census1[u], census2[u - d]) : DEFAULT_MC;
+		const int MC = u - d >= 0 ? HammingDistance(census1, census2[d]) : DEFAULT_MC;
 		Lc[d] = MC;
 	}
 }
@@ -214,7 +259,7 @@ static void scanCost(const cv::Mat_<T>& C1, const cv::Mat_<T>& C2, cv::Mat1b& L,
 	for (int vc = v0; vc != v1; vc += dv)
 	{
 		const T* _census1 = C1.template ptr<T>(vc);
-		const T* _census2 = C2.template ptr<T>(vc);
+		const T* _census2 = C2.template ptr<T>(vc) + w - 1;
 		for (int uc = u0; uc != u1; uc += du)
 		{
 			const int vp = vc - rv;
@@ -225,9 +270,9 @@ static void scanCost(const cv::Mat_<T>& C1, const cv::Mat_<T>& C2, cv::Mat1b& L,
 			uchar* _Lp = (uchar*)(L.data + vp * L.step.p[0] + up * L.step.p[1]); // for CV_DbgAssert avoidance
 
 			if (inside)
-				updateCost(_census1, _census2, _Lp, _Lc, uc, n, P1, P2);
+				updateCost(_census1[uc], _census2 - uc, _Lp, _Lc, uc, n, P1, P2);
 			else
-				updateCost(_census1, _census2, _Lc, uc, n);
+				updateCost(_census1[uc], _census2 - uc, _Lc, uc, n);
 		}
 	}
 }
@@ -428,8 +473,8 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 	{
 		census64[0].create(h, w);
 		census64[1].create(h, w);
-		census9x7(I1, census64[0]);
-		census9x7(I2, census64[1]);
+		census9x7<0>(I1, census64[0]);
+		census9x7<1>(I2, census64[1]);
 
 		int dir;
 OMP_PARALLEL_FOR
@@ -444,8 +489,8 @@ OMP_PARALLEL_FOR
 		census32[0].create(h, w);
 		census32[1].create(h, w);
 
-		symmetricCensus9x7(I1, census32[0]);
-		symmetricCensus9x7(I2, census32[1]);
+		symmetricCensus9x7<0>(I1, census32[0]);
+		symmetricCensus9x7<1>(I2, census32[1]);
 
 		int dir;
 OMP_PARALLEL_FOR
