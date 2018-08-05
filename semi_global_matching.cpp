@@ -190,7 +190,7 @@ static inline void updateCost(T census1, const T* census2, const uchar* Lp, ucha
 		{
 			for (int i = 0; i < 16; i++)
 				MC[i] = u - (d + i) >= 0 ? HammingDistance(census1, census2[d + i]) : DEFAULT_MC;
-}
+		}
 
 		const __m128i _MC = _mm_load_si128((__m128i*)MC);
 
