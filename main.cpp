@@ -1,4 +1,9 @@
+#include <iostream>
 #include <chrono>
+
+#include <opencv2/imgproc.hpp>
+#include <opencv2/highgui.hpp>
+
 #include "semi_global_matching.h"
 
 int main(int argc, char* argv[])

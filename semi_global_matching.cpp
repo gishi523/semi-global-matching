@@ -1,5 +1,7 @@
 #include "semi_global_matching.h"
 
+#include <opencv2/imgproc.hpp>
+
 #define USE_OPENMP
 #if defined(_OPENMP) && defined(USE_OPENMP)
 #ifdef _WIN32
@@ -37,12 +39,6 @@ static inline __m128i _mm_set1_epi_(uint64_t v) { return _mm_set1_epi64x(v); }
 
 #endif
 
-namespace cv
-{
-	using Mat1u32 = Mat_<uint32_t>;
-	using Mat1u64 = Mat_<uint64_t>;
-}
-
 static const int DEFAULT_MC = 64;
 
 static inline int HammingDistance(uint64_t c1, uint64_t c2) { return static_cast<int>(popcnt64(c1 ^ c2)); }
@@ -55,8 +51,10 @@ static inline int min4(int x, int y, int z, int w)
 };
 
 template <int VIEW = 0>
-static void census9x7(const cv::Mat& src, cv::Mat1u64& dst)
+static void census9x7(const cv::Mat& src, cv::Mat& dst)
 {
+	CV_Assert(dst.elemSize() == 8);
+
 	memset(dst.data, 0, dst.rows * dst.cols * sizeof(uint64_t));
 
 	const int RADIUS_U = 9 / 2;
@@ -65,6 +63,7 @@ static void census9x7(const cv::Mat& src, cv::Mat1u64& dst)
 OMP_PARALLEL_FOR
 	for (v = RADIUS_V; v < src.rows - RADIUS_V; v++)
 	{
+		uint64_t* dstptr = dst.ptr<uint64>(v);
 		for (int u = RADIUS_U; u < src.cols - RADIUS_U; u++)
 		{
 			uint64_t c = 0;
@@ -77,16 +76,18 @@ OMP_PARALLEL_FOR
 				}
 			}
 			if (VIEW == 0)
-				dst(v, u) = c;
+				dstptr[u] = c;
 			else
-				dst(v, src.cols - 1 - u) = c;
+				dstptr[src.cols - 1 - u] = c;
 		}
 	}
 }
 
 template <int VIEW = 0>
-static void symmetricCensus9x7(const cv::Mat& src, cv::Mat1u32& dst)
+static void symmetricCensus9x7(const cv::Mat& src, cv::Mat& dst)
 {
+	CV_Assert(dst.elemSize() == 4);
+
 	memset(dst.data, 0, dst.rows * dst.cols * sizeof(uint32_t));
 
 	const int RADIUS_U = 9 / 2;
@@ -96,6 +97,7 @@ static void symmetricCensus9x7(const cv::Mat& src, cv::Mat1u32& dst)
 OMP_PARALLEL_FOR
 	for (v = RADIUS_V; v < src.rows - RADIUS_V; v++)
 	{
+		uint32_t* dstptr = dst.ptr<uint32_t>(v);
 		for (int u = RADIUS_U; u < src.cols - RADIUS_U; u++)
 		{
 			uint32_t c = 0;
@@ -124,9 +126,9 @@ OMP_PARALLEL_FOR
 				}
 			}
 			if (VIEW == 0)
-				dst(v, u) = c;
+				dstptr[u] = c;
 			else
-				dst(v, src.cols - 1 - u) = c;
+				dstptr[src.cols - 1 - u] = c;
 		}
 	}
 }
@@ -242,7 +244,7 @@ static inline void updateCost(T census1, const T* census2, uchar* Lc, int u, int
 }
 
 template <typename T>
-static void scanCost(const cv::Mat_<T>& C1, const cv::Mat_<T>& C2, cv::Mat1b& L, int P1, int P2, int ru, int rv)
+static void scanCost(const cv::Mat& C1, const cv::Mat& C2, cv::Mat1b& L, int P1, int P2, int ru, int rv)
 {
 	const int h = L.size[0];
 	const int w = L.size[1];
@@ -370,8 +372,10 @@ static inline int winnerTakesAll(const uchar* L0, const uchar* L1, const uchar* 
 	return disp;
 }
 
-static void calcDisparity(const std::vector<cv::Mat1b>& L, cv::Mat1w& S, cv::Mat& D1, cv::Mat& D2, int DISP_SCALE)
+static void calcDisparity(const std::vector<cv::Mat1b>& L, cv::Mat1w& S, cv::Mat& D1, cv::Mat& D2)
 {
+	const int DISP_SCALE = SemiGlobalMatching::DISP_SCALE;
+
 	const int h = S.size[0];
 	const int w = S.size[1];
 	const int n = S.size[2];
@@ -464,40 +468,39 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 	const int n = param_.numDisparities;
 	const int dims[3] = { h, w, n };
 
-	const int NUM_DIRECTIONS = 8;
-	const int ru[NUM_DIRECTIONS] = { 1, 1, 0, -1, -1, -1, 0, 1 };
-	const int rv[NUM_DIRECTIONS] = { 0, 1, 1, 1, 0, -1, -1, -1 };
-	L.resize(NUM_DIRECTIONS);
+	const int MAX_DIRECTIONS = 8;
+	const int ru[MAX_DIRECTIONS] = { +1, -1, +0, +0, +1, -1, -1, +1 };
+	const int rv[MAX_DIRECTIONS] = { +0, +0, +1, -1, +1, +1, -1, -1 };
+	L.resize(MAX_DIRECTIONS);
 
 	if (param_.censusType == CENSUS_9x7)
 	{
-		census64[0].create(h, w);
-		census64[1].create(h, w);
-		census9x7<0>(I1, census64[0]);
-		census9x7<1>(I2, census64[1]);
+		census[0].create(h, w, CV_64F);
+		census[1].create(h, w, CV_64F);
+		census9x7<0>(I1, census[0]);
+		census9x7<1>(I2, census[1]);
 
 		int dir;
 OMP_PARALLEL_FOR
-		for (dir = 0; dir < NUM_DIRECTIONS; dir++)
+		for (dir = 0; dir < MAX_DIRECTIONS; dir++)
 		{
 			L[dir].create(3, dims);
-			scanCost(census64[0], census64[1], L[dir], param_.P1, param_.P2, ru[dir], rv[dir]);
+			scanCost<uint64_t>(census[0], census[1], L[dir], param_.P1, param_.P2, ru[dir], rv[dir]);
 		}
 	}
 	else if (param_.censusType == SYMMETRIC_CENSUS_9x7)
 	{
-		census32[0].create(h, w);
-		census32[1].create(h, w);
-
-		symmetricCensus9x7<0>(I1, census32[0]);
-		symmetricCensus9x7<1>(I2, census32[1]);
+		census[0].create(h, w, CV_32S);
+		census[1].create(h, w, CV_32S);
+		symmetricCensus9x7<0>(I1, census[0]);
+		symmetricCensus9x7<1>(I2, census[1]);
 
 		int dir;
 OMP_PARALLEL_FOR
-		for (dir = 0; dir < NUM_DIRECTIONS; dir++)
+		for (dir = 0; dir < MAX_DIRECTIONS; dir++)
 		{
 			L[dir].create(3, dims);
-			scanCost(census32[0], census32[1], L[dir], param_.P1, param_.P2, ru[dir], rv[dir]);
+			scanCost<uint32_t>(census[0], census[1], L[dir], param_.P1, param_.P2, ru[dir], rv[dir]);
 		}
 	}
 	else
@@ -508,7 +511,7 @@ OMP_PARALLEL_FOR
 	S.create(3, dims);
 	D1.create(h, w, CV_16S);
 	D2.create(h, w, CV_16S);
-	calcDisparity(L, S, D1, D2, DISP_SCALE);
+	calcDisparity(L, S, D1, D2);
 
 	if (param_.medianKernelSize > 0)
 	{
