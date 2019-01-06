@@ -434,8 +434,11 @@ OMP_PARALLEL_FOR
 	}
 }
 
-static void LRConsistencyCheck(cv::Mat& D1, cv::Mat& D2, int max12Diff, int DISP_SHIFT, int DISP_INV)
+static void LRConsistencyCheck(cv::Mat& D1, cv::Mat& D2, int max12Diff)
 {
+	const int DISP_SHIFT = SemiGlobalMatching::DISP_SHIFT;
+	const int DISP_INV = SemiGlobalMatching::DISP_INV;
+
 	const int h = D1.rows;
 	const int w = D1.cols;
 	int v;
@@ -522,6 +525,6 @@ OMP_PARALLEL_FOR
 	const int max12Diff = param_.max12Diff << DISP_SHIFT;
 	if (max12Diff >= 0)
 	{
-		LRConsistencyCheck(D1, D2, max12Diff, DISP_SHIFT, DISP_INV);
+		LRConsistencyCheck(D1, D2, max12Diff);
 	}
 }
