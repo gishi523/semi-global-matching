@@ -372,14 +372,16 @@ static inline int winnerTakesAll(const uchar* L0, const uchar* L1, const uchar* 
 	return disp;
 }
 
-static void calcDisparity(const std::vector<cv::Mat1b>& L, cv::Mat1w& S, cv::Mat& D1, cv::Mat& D2)
+static void calcDisparity(const std::vector<cv::Mat1b>& L, cv::Mat1w& S, cv::Mat& D1, cv::Mat& D2,
+	float uniquenessRatio)
 {
 	const int DISP_SCALE = SemiGlobalMatching::DISP_SCALE;
+	const int DISP_INV = SemiGlobalMatching::DISP_INV;
 
 	const int h = S.size[0];
 	const int w = S.size[1];
 	const int n = S.size[2];
-
+	
 	int v;
 OMP_PARALLEL_FOR
 	for (v = 0; v < h; v++)
@@ -399,6 +401,19 @@ OMP_PARALLEL_FOR
 			const uchar* _L7 = L[7].ptr<uchar>(v, u);
 
 			int disp = winnerTakesAll(_L0, _L1, _L2, _L3, _L4, _L5, _L6, _L7, _S, n);
+
+			// uniqueness check
+			int d;
+			for (d = 0; d < n; d++)
+			{
+				if (uniquenessRatio * _S[d] < _S[disp] && std::abs(d - disp) > 1)
+					break;
+			}
+			if (d < n)
+			{
+				_D1[u] = DISP_INV;
+				continue;
+			}
 
 			// sub-pixel interpolation 
 			if (disp > 0 && disp < n - 1)
@@ -514,7 +529,7 @@ OMP_PARALLEL_FOR
 	S.create(3, dims);
 	D1.create(h, w, CV_16S);
 	D2.create(h, w, CV_16S);
-	calcDisparity(L, S, D1, D2);
+	calcDisparity(L, S, D1, D2, param_.uniquenessRatio);
 
 	if (param_.medianKernelSize > 0)
 	{

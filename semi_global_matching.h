@@ -22,6 +22,7 @@ public:
 		int P1;
 		int P2;
 		int numDisparities;
+		float uniquenessRatio;
 		int max12Diff;
 		int medianKernelSize;
 		CensusType censusType;
@@ -32,6 +33,7 @@ public:
 			P1 = 10;
 			P2 = 120;
 			numDisparities = 64;
+			uniquenessRatio = 0.95f;
 			max12Diff = 5;
 			medianKernelSize = 3;
 			censusType = SYMMETRIC_CENSUS_9x7;
