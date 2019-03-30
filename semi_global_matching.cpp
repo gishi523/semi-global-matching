@@ -464,6 +464,9 @@ OMP_PARALLEL_FOR
 		short* _D2 = D2.ptr<short>(v);
 		for (int u = 0; u < w; u++)
 		{
+			if (_D1[u] == DISP_INV)
+				continue;
+
 			const int d = _D1[u] >> DISP_SHIFT;
 			if (u - d >= 0 && std::abs(_D1[u] - _D2[u - d]) > max12Diff)
 				_D1[u] = DISP_INV;
