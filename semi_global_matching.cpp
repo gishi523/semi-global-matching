@@ -372,6 +372,105 @@ static inline int winnerTakesAll(const uchar* L0, const uchar* L1, const uchar* 
 	return disp;
 }
 
+static inline int winnerTakesAll(const uchar* L0, const uchar* L1, const uchar* L2, const uchar* L3,
+	ushort* S, int n)
+{
+	int minS = std::numeric_limits<int>::max();
+	int disp = 0;
+
+#ifdef WITH_SSE
+
+	__m128i _zero = _mm_setzero_si128();
+	for (int d = 0; d < n; d += 16)
+	{
+		__m128i _L0 = _mm_load_si128((__m128i*)&L0[d]);
+		__m128i _L1 = _mm_load_si128((__m128i*)&L1[d]);
+		__m128i _L2 = _mm_load_si128((__m128i*)&L2[d]);
+		__m128i _L3 = _mm_load_si128((__m128i*)&L3[d]);
+
+		// sign extension
+		__m128i _L0_0 = _mm_unpacklo_epi8(_L0, _zero);
+		__m128i _L0_1 = _mm_unpackhi_epi8(_L0, _zero);
+		__m128i _L1_0 = _mm_unpacklo_epi8(_L1, _zero);
+		__m128i _L1_1 = _mm_unpackhi_epi8(_L1, _zero);
+		__m128i _L2_0 = _mm_unpacklo_epi8(_L2, _zero);
+		__m128i _L2_1 = _mm_unpackhi_epi8(_L2, _zero);
+		__m128i _L3_0 = _mm_unpacklo_epi8(_L3, _zero);
+		__m128i _L3_1 = _mm_unpackhi_epi8(_L3, _zero);
+
+		// add costs
+		_L0_0 = _mm_adds_epu16(_L0_0, _L1_0);
+		_L0_1 = _mm_adds_epu16(_L0_1, _L1_1);
+		_L2_0 = _mm_adds_epu16(_L2_0, _L3_0);
+		_L2_1 = _mm_adds_epu16(_L2_1, _L3_1);
+
+		const __m128i _S_0 = _mm_adds_epu16(_L0_0, _L2_0);
+		const __m128i _S_1 = _mm_adds_epu16(_L0_1, _L2_1);
+
+		const __m128i _minS_0 = _mm_minpos_epu16(_S_0);
+		const __m128i _minS_1 = _mm_minpos_epu16(_S_1);
+		_mm_store_si128((__m128i*)&S[d + 0], _S_0);
+		_mm_store_si128((__m128i*)&S[d + 8], _S_1);
+
+		const int S_0 = _mm_extract_epi16(_minS_0, 0);
+		const int S_1 = _mm_extract_epi16(_minS_1, 0);
+
+		if (S_0 < minS)
+		{
+			minS = S_0;
+			disp = _mm_extract_epi16(_minS_0, 1) + d + 0;
+		}
+		if (S_1 < minS)
+		{
+			minS = S_1;
+			disp = _mm_extract_epi16(_minS_1, 1) + d + 8;
+		}
+	}
+
+#else
+
+	for (int d = 0; d < n; d++)
+	{
+		S[d] = L0[d] + L1[d] + L2[d] + L3[d];
+		if (S[d] < minS)
+		{
+			minS = S[d];
+			disp = d;
+		}
+	}
+
+#endif
+
+	return disp;
+}
+
+static inline int WTA4Path(const std::vector<cv::Mat1b>& L, cv::Mat1w& S, int v, int u, int n)
+{
+	ushort* _S = S.ptr<ushort>(v, u);
+	const uchar* _L0 = L[0].ptr<uchar>(v, u);
+	const uchar* _L1 = L[1].ptr<uchar>(v, u);
+	const uchar* _L2 = L[2].ptr<uchar>(v, u);
+	const uchar* _L3 = L[3].ptr<uchar>(v, u);
+	return winnerTakesAll(_L0, _L1, _L2, _L3, _S, n);
+}
+
+static inline int WTA8Path(const std::vector<cv::Mat1b>& L, cv::Mat1w& S, int v, int u, int n)
+{
+	ushort* _S = S.ptr<ushort>(v, u);
+	const uchar* _L0 = L[0].ptr<uchar>(v, u);
+	const uchar* _L1 = L[1].ptr<uchar>(v, u);
+	const uchar* _L2 = L[2].ptr<uchar>(v, u);
+	const uchar* _L3 = L[3].ptr<uchar>(v, u);
+	const uchar* _L4 = L[4].ptr<uchar>(v, u);
+	const uchar* _L5 = L[5].ptr<uchar>(v, u);
+	const uchar* _L6 = L[6].ptr<uchar>(v, u);
+	const uchar* _L7 = L[7].ptr<uchar>(v, u);
+	return winnerTakesAll(_L0, _L1, _L2, _L3, _L4, _L5, _L6, _L7, _S, n);
+}
+
+using WinnerTakesAll = int(*)(const std::vector<cv::Mat1b>& L, cv::Mat1w& S, int v, int u, int n);
+
+template <WinnerTakesAll wta>
 static void calcDisparity(const std::vector<cv::Mat1b>& L, cv::Mat1w& S, cv::Mat& D1, cv::Mat& D2,
 	float uniquenessRatio)
 {
@@ -391,16 +490,7 @@ OMP_PARALLEL_FOR
 		for (int u = 0; u < w; u++)
 		{
 			ushort* _S = S.ptr<ushort>(v, u);
-			const uchar* _L0 = L[0].ptr<uchar>(v, u);
-			const uchar* _L1 = L[1].ptr<uchar>(v, u);
-			const uchar* _L2 = L[2].ptr<uchar>(v, u);
-			const uchar* _L3 = L[3].ptr<uchar>(v, u);
-			const uchar* _L4 = L[4].ptr<uchar>(v, u);
-			const uchar* _L5 = L[5].ptr<uchar>(v, u);
-			const uchar* _L6 = L[6].ptr<uchar>(v, u);
-			const uchar* _L7 = L[7].ptr<uchar>(v, u);
-
-			int disp = winnerTakesAll(_L0, _L1, _L2, _L3, _L4, _L5, _L6, _L7, _S, n);
+			int disp = wta(L, S, v, u, n);
 
 			// uniqueness check
 			int d;
@@ -483,6 +573,7 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 	CV_Assert(I1.type() == CV_8U && I2.type() == CV_8U);
 	CV_Assert(I1.size() == I2.size());
 	CV_Assert(param_.numDisparities % 16 == 0);
+	CV_Assert(param_.pathType == SCAN_4PATH || param_.pathType == SCAN_8PATH);
 
 	const int h = I1.rows;
 	const int w = I1.cols;
@@ -492,7 +583,9 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 	const int MAX_DIRECTIONS = 8;
 	const int ru[MAX_DIRECTIONS] = { +1, -1, +0, +0, +1, -1, -1, +1 };
 	const int rv[MAX_DIRECTIONS] = { +0, +0, +1, -1, +1, +1, -1, -1 };
-	L.resize(MAX_DIRECTIONS);
+
+	const int numDirections = param_.pathType == SCAN_4PATH ? 4 : 8;
+	L.resize(numDirections);
 
 	if (param_.censusType == CENSUS_9x7)
 	{
@@ -503,7 +596,7 @@ void SemiGlobalMatching::compute(const cv::Mat& I1, const cv::Mat& I2, cv::Mat& 
 
 		int dir;
 OMP_PARALLEL_FOR
-		for (dir = 0; dir < MAX_DIRECTIONS; dir++)
+		for (dir = 0; dir < numDirections; dir++)
 		{
 			L[dir].create(3, dims);
 			scanCost<uint64_t>(census[0], census[1], L[dir], param_.P1, param_.P2, ru[dir], rv[dir]);
@@ -518,7 +611,7 @@ OMP_PARALLEL_FOR
 
 		int dir;
 OMP_PARALLEL_FOR
-		for (dir = 0; dir < MAX_DIRECTIONS; dir++)
+		for (dir = 0; dir < numDirections; dir++)
 		{
 			L[dir].create(3, dims);
 			scanCost<uint32_t>(census[0], census[1], L[dir], param_.P1, param_.P2, ru[dir], rv[dir]);
@@ -532,7 +625,11 @@ OMP_PARALLEL_FOR
 	S.create(3, dims);
 	D1.create(h, w, CV_16S);
 	D2.create(h, w, CV_16S);
-	calcDisparity(L, S, D1, D2, param_.uniquenessRatio);
+
+	if (param_.pathType == SCAN_4PATH)
+		calcDisparity<WTA4Path>(L, S, D1, D2, param_.uniquenessRatio);
+	else
+		calcDisparity<WTA8Path>(L, S, D1, D2, param_.uniquenessRatio);
 
 	if (param_.medianKernelSize > 0)
 	{

@@ -17,6 +17,12 @@ public:
 		SYMMETRIC_CENSUS_9x7,
 	};
 
+	enum PathType
+	{
+		SCAN_4PATH,
+		SCAN_8PATH,
+	};
+
 	struct Parameters
 	{
 		int P1;
@@ -26,6 +32,7 @@ public:
 		int max12Diff;
 		int medianKernelSize;
 		CensusType censusType;
+		PathType pathType;
 
 		// default settings
 		Parameters()
@@ -37,6 +44,7 @@ public:
 			max12Diff = 5;
 			medianKernelSize = 3;
 			censusType = SYMMETRIC_CENSUS_9x7;
+			pathType = SCAN_8PATH;
 		}
 	};
 
