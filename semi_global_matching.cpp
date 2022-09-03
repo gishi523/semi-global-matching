@@ -37,6 +37,12 @@ static inline int _mm_hmin_epu8(__m128i v)
 static inline __m128i _mm_set1_epi_(uint32_t v) { return _mm_set1_epi32(v); }
 static inline __m128i _mm_set1_epi_(uint64_t v) { return _mm_set1_epi64x(v); }
 
+#else
+static inline int min4(int x, int y, int z, int w)
+{
+	return std::min(std::min(x, y), std::min(z, w));
+};
+
 #endif
 
 static const int DEFAULT_MC = 64;
@@ -44,11 +50,6 @@ static const int DEFAULT_MC = 64;
 static inline int HammingDistance(uint64_t c1, uint64_t c2) { return static_cast<int>(popcnt64(c1 ^ c2)); }
 
 static inline int HammingDistance(uint32_t c1, uint32_t c2) { return static_cast<int>(popcnt32(c1 ^ c2)); }
-
-static inline int min4(int x, int y, int z, int w)
-{
-	return std::min(std::min(x, y), std::min(z, w));
-};
 
 template <int VIEW = 0>
 static void census9x7(const cv::Mat& src, cv::Mat& dst)
